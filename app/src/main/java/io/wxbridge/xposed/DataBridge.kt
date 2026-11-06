@@ -105,7 +105,7 @@ internal object DataBridge {
         if (d != null) {
             o.put("dbClass", d.javaClass.name)
             runCatching {
-                o.put("tables", JSONArray(queryRows(d, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")))
+                o.put("tables", queryRows(d, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"))
             }.onFailure { o.put("tablesError", it.message ?: it.javaClass.simpleName) }
         }
         return o.toString()
