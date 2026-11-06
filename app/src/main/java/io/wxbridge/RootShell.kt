@@ -255,6 +255,21 @@ object RootShell {
         val prefsInfo = probe.candidates.joinToString("\n") { r ->
             "  $r\n      files/wxbridge: ${listWxFiles(r)}\n      shared_prefs:   ${listKeyPrefs(r)}"
         }
+        // 探路：同一次 su 里把 /proc/<pid>/root 的每一层都 ls 一遍，
+        // 才能分清是「pid 不存在」「root 不可读」还是「子路径不存在」
+        val walk = probe.procs.joinToString("\n") { (pid, u) ->
+            """
+            echo '--- pid $pid (user $u) ---'
+            ls -ld /proc/$pid 2>&1
+            ls -ld /proc/$pid/root 2>&1
+            readlink /proc/$pid/root 2>&1
+            ls -ld /proc/$pid/root/data 2>&1
+            ls -ld /proc/$pid/root/data/user 2>&1
+            ls -ld /proc/$pid/root/data/user/$u 2>&1
+            ls -1  /proc/$pid/root/data/user/$u/com.tencent.mm 2>&1 | head -6
+            ls -l  /proc/$pid/root/data/user/$u/com.tencent.mm/files/wxbridge/keys.json 2>&1
+            """.trimIndent()
+        }
         val cmd = """
             echo '= uid ='; id 2>&1
             echo '= 当前 SELinux 上下文 ='; cat /proc/self/attr/current 2>&1
@@ -266,10 +281,12 @@ object RootShell {
             echo '= 候选目录 ='; echo '  $candList'
             echo '= 选中的根路径 ='; echo '$root'
             echo '= 根目录内容 ='; ls -1d '$root'/* 2>&1 | head -6
-            echo '= 各根下的 wx* 文件 ='; echo '$prefsInfo'
+            echo '= 各根下的文件 ='; echo '$prefsInfo'
             echo '= 密码文件 ='; ls -l '$prefs' 2>&1
+            echo '= 逐层探路 ='
+            $walk
         """.trimIndent()
-        val r = exec(cmd, 25)
+        val r = exec(cmd, 30)
         return (r.out + if (r.err.isNotBlank()) "\n[stderr] ${r.err}" else "").trim()
     }
 
