@@ -3,6 +3,7 @@ package io.wxbridge.xposed
 import android.app.AndroidAppHelper
 import android.content.Context
 import org.json.JSONObject
+import java.io.File
 
 /**
  * 把 hook 到的密码交给主 App。
@@ -45,6 +46,9 @@ internal object KeyBridge {
                 .edit()
                 .putString(KEY_MAIN_DB, dbPath)
                 .commit()
+            // 同时写一份纯文本，App 侧读文件比解析 XML 可靠
+            val dir = File(app.filesDir, "wxbridge").apply { mkdirs() }
+            File(dir, "main_db.txt").writeText(dbPath)
             xlog("main db recorded: ${dbPath.substringAfterLast('/')}")
         }
     }
@@ -73,12 +77,29 @@ internal object KeyBridge {
                 .getOrElse { JSONObject() }
             json.put(dbPath, hex)
 
-            sp.edit()
+            // commit() 返回 false 是「没写进去」，不是异常 —— 早先没检查它，
+            // 日志照样打 key captured，但文件根本没生成，白排查很久
+            val ok = sp.edit()
                 .putString(KEY_KEYS, json.toString())
                 .putLong(KEY_UPDATED_AT, System.currentTimeMillis())
                 .commit()
+            if (!ok) {
+                written.remove(sig)
+                xlog("prefs commit FAILED: ${app.applicationInfo.dataDir}/shared_prefs/$PREFS.xml")
+                return@runCatching
+            }
 
-            xlog("key captured: ${dbPath.substringAfterLast('/')} len=${password.size} hex=${hex.take(8)}…")
+            // 主通道：直接写文件。
+            // SharedPreferences 的 commit() 返回 false 时不抛异常，早期就因此
+            // 出现过「日志说成功、文件其实不存在」。文件写入失败会抛，不会静默。
+            val dir = File(app.filesDir, "wxbridge").apply { mkdirs() }
+            val f = File(dir, "keys.json")
+            f.writeText(json.toString())
+
+            xlog(
+                "key captured: ${dbPath.substringAfterLast('/')} len=${password.size} " +
+                    "hex=${hex.take(8)}… → ${f.absolutePath}"
+            )
         }.onFailure {
             written.remove(sig)
             xlog("write prefs failed: $it")

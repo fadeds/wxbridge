@@ -65,45 +65,70 @@ object WxKeyReader {
             return Result.Fail("没有 root 权限")
         }
 
-        // 微信可能装在「手机分身」里（user 999），候选根目录要按实际用户枚举；
-        // 文件名也不写死 —— 项目改名时 prefs 名字变过（wxai_bridge → wxbridge）
+        // 微信可能装在「手机分身」里（user 999），候选根目录按实际用户枚举
         val roots = RootShell.wxCandidates()
-        val prefsCandidates = roots.mapNotNull { RootShell.findKeyPrefs(it) }
-        val xml = readFirst(prefsCandidates)
-            ?: return Result.Fail(
-                "读不到密码文件。候选根目录与各自 shared_prefs 里的 wx* 文件：\n" +
-                    roots.joinToString("\n") { r ->
-                        val files = RootShell.listKeyPrefs(r)
-                        "  · $r\n      " + files.ifBlank { "（没有 wx* 文件）" }.replace("\n", " ")
-                    } + "\n" +
-                    "→ 确认 LSPosed 里模块已启用、作用域勾了微信\n" +
-                    "→ 然后冷启动（强行停止后重开）微信"
-            )
 
-        val map = parsePrefs(xml)
-        val keysJson = map["db_keys"]
-            ?: return Result.Fail(
-                "模块还没抓到任何密码。\n" +
-                    "→ 冷启动微信后，先在微信里点开任意一个聊天，再回来读"
-            )
+        // ① 首选模块直接写的 keys.json。
+        //    走 SharedPreferences 有过一次「日志说写成功、文件其实不存在」的教训，
+        //    普通文件写入失败会抛异常，不会静默。
+        var keysJson: String? = null
+        var mainHint: String? = null
+        var source = ""
+        for (r in roots) {
+            val t = RootShell.readText("$r/files/wxbridge/keys.json")
+            if (!t.isNullOrBlank()) {
+                keysJson = t
+                source = "$r/files/wxbridge/keys.json"
+                mainHint = RootShell.readText("$r/files/wxbridge/main_db.txt")
+                    ?.trim()?.ifBlank { null }
+                break
+            }
+        }
+
+        // ② 回退：模块写进 SharedPreferences 的 XML
+        if (keysJson == null) {
+            val prefsCandidates = roots.mapNotNull { RootShell.findKeyPrefs(it) }
+            val xml = readFirst(prefsCandidates)
+                ?: return Result.Fail(
+                    "读不到模块写下的密钥。逐个候选根目录检查结果：\n" +
+                        roots.joinToString("\n") { r ->
+                            "  · $r\n" +
+                                "      files/wxbridge: ${RootShell.listWxFiles(r)}\n" +
+                                "      shared_prefs:   ${RootShell.listKeyPrefs(r)}"
+                        } + "\n" +
+                        "→ 确认 LSPosed 里模块已启用、作用域勾了微信\n" +
+                        "→ 然后冷启动（强行停止后重开）微信"
+                )
+            val map = parsePrefs(xml)
+            keysJson = map["db_keys"]
+                ?: return Result.Fail(
+                    "模块还没抓到任何密码（$prefsCandidates）。\n" +
+                        "→ 冷启动微信后，先在微信里点开任意一个聊天，再回来读"
+                )
+            mainHint = map["main_db"]
+            source = prefsCandidates.first()
+        }
+
+        val keysRaw = keysJson
 
         // 库里记的路径是微信进程视角的 /data/user/0/...；su 在另一个 namespace，
         // 这里统一映射成当前真正能访问的形态（可能带 /proc/<pid>/root 前缀）
-        val keys = parseKeys(keysJson)
+        val keys = parseKeys(keysRaw)
             .mapKeys { RootShell.wxPath(it.key) }
             .toMutableMap()
         if (keys.isEmpty()) {
-            return Result.Fail("db_keys 为空，模块可能没抓到密码")
+            return Result.Fail("密钥内容为空：$source")
         }
+        onLog("密钥来源：$source（${keys.size} 个库）")
 
         // 模块会探测出哪个库含 message 表并记下来，优先用这个
-        val mainPath = map["main_db"]
-        var main: Pair<String, ByteArray>? = when {
-            mainPath != null && keys.containsKey(mainPath) -> mainPath to keys.getValue(mainPath)
-            else -> keys.entries
+        var main: Pair<String, ByteArray>? =
+            mainHint?.let { hint ->
+                val mapped = RootShell.wxPath(hint)
+                keys[mapped]?.let { mapped to it }
+            } ?: keys.entries
                 .firstOrNull { it.key.endsWith("EnMicroMsg.db") }
                 ?.let { it.key to it.value }
-        }
 
         // 上次 App 侧探测出来的主库。库路径必须以当前 MicroMsg/<md5>/ 开头，
         // 换号或重登之后旧缓存会失效，不能blindly信任

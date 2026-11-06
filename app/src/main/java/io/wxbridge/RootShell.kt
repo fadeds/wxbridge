@@ -212,20 +212,31 @@ object RootShell {
      *
      * 不写死文件名：项目从 wxai 改名到 wxbridge 时 prefs 名字跟着变过，
      * 老版本留下的是 wxai_bridge.xml。扫目录比猜名字可靠。
+     *
+     * 注意这里 **不能** 把 stderr 丢掉 —— 早先 `2>/dev/null` 把
+     * "Permission denied" 吞了，看起来像「没有文件」，白排查了好几轮。
      */
     fun findKeyPrefs(root: String): String? {
-        val r = exec(
-            "ls -1 '$root/shared_prefs' 2>/dev/null | grep -iE 'wxbridge|wxai' | head -1",
-            10
-        )
-        val name = r.out.trim().lineSequence().firstOrNull()?.trim()
-        if (name.isNullOrEmpty()) return null
-        return "$root/shared_prefs/$name"
+        val r = exec("ls -1 '$root/shared_prefs' 2>&1", 12)
+        val line = r.out.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.contains("wxbridge", true) || it.contains("wxai", true) }
+            ?: return null
+        if (line.endsWith(":") || line.contains(" ")) return null   // 报错行，不是文件名
+        return "$root/shared_prefs/$line"
     }
 
-    /** 列 shared_prefs 里所有带 wx 字样的文件，用于诊断 */
-    fun listKeyPrefs(root: String): String =
-        exec("ls -1 '$root/shared_prefs' 2>/dev/null | grep -i 'wx' | head -8", 10).out.trim()
+    /** 列 shared_prefs 的原始输出（含报错），用于诊断 */
+    fun listKeyPrefs(root: String): String {
+        val r = exec("ls -1 '$root/shared_prefs' 2>&1 | head -10", 12)
+        return r.out.trim().replace("\n", " | ")
+    }
+
+    /** 列 files/wxbridge 的原始输出（含报错），用于诊断 */
+    fun listWxFiles(root: String): String {
+        val r = exec("ls -1 '$root/files/wxbridge' 2>&1 | head -10", 12)
+        return r.out.trim().replace("\n", " | ")
+    }
 
     /**
      * root 全链路诊断。
@@ -242,8 +253,7 @@ object RootShell {
         val root = wxRoot(refresh = true)
         val prefs = "$root/shared_prefs/wxbridge.xml"
         val prefsInfo = probe.candidates.joinToString("\n") { r ->
-            val f = listKeyPrefs(r).replace("\n", " ")
-            "  $r\n      -> " + f.ifBlank { "（无 wx* 文件）" }
+            "  $r\n      files/wxbridge: ${listWxFiles(r)}\n      shared_prefs:   ${listKeyPrefs(r)}"
         }
         val cmd = """
             echo '= uid ='; id 2>&1
