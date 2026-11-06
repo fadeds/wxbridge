@@ -31,7 +31,11 @@ internal object WcdbKeyHook {
         Triple("com.tencent.wcdb.database.SQLiteDatabase", "openDatabase", true),
         // 微信打开已存在的库时可能走这个重载，漏了它会导致一次都抓不到
         Triple("com.tencent.wcdb.database.SQLiteDatabase", "openOrCreateDatabase", true),
-        // 底层连接，兜底：少数路径绕过上面两个直接建连接
+        // 再往上追一层：配置对象在开库前一定会构造，构造函数里就带着 path 和 password
+        Triple("com.tencent.wcdb.database.SQLiteDatabaseConfiguration", "<init>", false),
+        // 实例方法，某些路径绕过静态入口
+        Triple("com.tencent.wcdb.database.SQLiteDatabase", "open", false),
+        // 底层连接，兜底
         Triple("com.tencent.wcdb.database.SQLiteConnection", "open", false)
     )
 
