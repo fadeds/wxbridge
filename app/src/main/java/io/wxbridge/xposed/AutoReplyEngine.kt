@@ -362,8 +362,11 @@ internal object AutoReplyEngine {
     // ---------------- 配置与日志 ----------------
 
     private fun loadCfg(): AutoReplyConfig? {
-        val f = File(AutoReplyPaths.CFG)
-        if (!f.exists()) return null
+        // 两种路径写法在微信进程里指向同一个目录，谁存在用谁
+        val f = listOf(AutoReplyPaths.CFG_MODULE, AutoReplyPaths.CFG_LEGACY)
+            .map { File(it) }
+            .firstOrNull { it.exists() }
+            ?: return null
         val mtime = f.lastModified()
         if (mtime != lastCfgMtime) {
             lastCfgMtime = mtime
@@ -376,7 +379,7 @@ internal object AutoReplyEngine {
     private fun log(msg: String) {
         xlog("[$TAG] $msg")
         runCatching {
-            val f = File(AutoReplyPaths.LOG)
+            val f = File(AutoReplyPaths.LOG_MODULE)
             f.parentFile?.mkdirs()
             if (!f.exists()) f.createNewFile()
             val line = "${SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA).format(Date())} $msg\n"

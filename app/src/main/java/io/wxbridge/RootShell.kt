@@ -49,7 +49,24 @@ object RootShell {
         }
         tOut.join(1000)
         tErr.join(1000)
-        return Result(p.exitValue(), out.toString(), err.toString())
+        // /proc/self/attr/current 之类输出末尾带 \u0000，留在字符串里会把
+        // TextView 变成非法 XML 字符（uiautomator/无障碍全都读不了界面），这里统一清掉
+        return Result(p.exitValue(), clean(out.toString()), clean(err.toString()))
+    }
+
+    /** 去掉控制字符（保留换行和制表），NUL 转成换行 */
+    private fun clean(s: String): String {
+        if (s.isEmpty()) return s
+        val sb = StringBuilder(s.length)
+        for (c in s) {
+            when {
+                c == '\u0000' -> sb.append('\n')
+                c == '\n' || c == '\t' -> sb.append(c)
+                c.code < 0x20 -> {}
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
     }
 
     /**
@@ -99,6 +116,30 @@ object RootShell {
         return Result(p.exitValue(), out.toString(), err.toString())
     }
 
+    /** 路径是否存在（走 root，用于判断该用 /data/user/0 还是 /data/data 形态） */
+    fun exists(path: String): Boolean {
+        val r = exec("test -e '$path' && echo 1 || echo 0", 8)
+        return r.out.trim().endsWith("1")
+    }
+
+    /**
+     * 微信数据目录的真实路径。
+     *
+     * KernelSU 的 su 处在全局 mount namespace，`/data/data/com.tencent.mm`
+     * 在那里报 No such file（不是权限问题），`/data/user/0/...` 才存在。
+     * 两种都可能，所以运行时探一次并缓存。
+     */
+    @Volatile
+    private var wxDataDir: String? = null
+
+    fun wxData(): String {
+        wxDataDir?.let { return it }
+        val hit = WxPaths.wxDataDirs().firstOrNull { exists(it) }
+            ?: WxPaths.WX_DATA_USER
+        wxDataDir = hit
+        return hit
+    }
+
     /**
      * root 全链路诊断。
      *
@@ -112,10 +153,12 @@ object RootShell {
             echo '= 当前 SELinux 上下文 ='; cat /proc/self/attr/current 2>&1
             echo '= getenforce ='; getenforce 2>&1
             echo '= su 位置 ='; command -v su 2>&1
-            echo '= 微信目录 stat ='; ls -ld /data/data/com.tencent.mm 2>&1
-            echo '= MicroMsg 前几项 ='; ls -1 /data/data/com.tencent.mm/MicroMsg 2>&1 | head -5
-            echo '= shared_prefs 前几项 ='; ls -1 /data/data/com.tencent.mm/shared_prefs 2>&1 | head -5
-            echo '= mount namespace ='; readlink /proc/self/ns/mnt 2>&1
+            echo '= namespace ='; readlink /proc/self/ns/mnt 2>&1
+            echo '= /data/data 形式 ='; ls -ld /data/data/com.tencent.mm 2>&1
+            echo '= /data/user/0 形式 ='; ls -ld /data/user/0/com.tencent.mm 2>&1
+            echo '= MicroMsg ='; ls -1 /data/user/0/com.tencent.mm/MicroMsg 2>&1 | head -5
+            echo '= shared_prefs ='; ls -1 /data/user/0/com.tencent.mm/shared_prefs 2>&1 | head -6
+            echo '= 密码文件 ='; ls -l /data/user/0/com.tencent.mm/shared_prefs/wxbridge.xml 2>&1
         """.trimIndent()
         val r = exec(cmd, 20)
         return (r.out + if (r.err.isNotBlank()) "\n[stderr] ${r.err}" else "").trim()

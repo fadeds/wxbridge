@@ -509,7 +509,7 @@ class MainActivity : Activity() {
             if (err == null) {
                 lastSyncedJson = conf.toJson()
                 log("界面配置已保存")
-                log("自动回复配置已写入 ${AutoReplyPaths.CFG}，微信进程约 4 秒内重新加载")
+                log("自动回复配置已写入 ${AutoReplyPaths.cfgApp()}，微信进程约 4 秒内重新加载")
             } else {
                 log("界面配置已保存（App 内），但写入微信目录失败：$err")
             }
@@ -525,7 +525,7 @@ class MainActivity : Activity() {
             persistAllUi()
             if (err == null) {
                 lastSyncedJson = conf.toJson()
-                log("已写入 ${AutoReplyPaths.CFG}")
+                log("已写入 ${AutoReplyPaths.cfgApp()}")
                 log("微信进程约 4 秒内重新加载配置")
                 if (conf.enabled) log("建议先把自己小号放进白名单试一条，别直接开全量")
             } else {
@@ -675,9 +675,11 @@ class MainActivity : Activity() {
             val r = withContext(Dispatchers.IO) {
                 RootShell.exec(
                     "echo '--- shared_prefs ---'; " +
-                        "ls -l /data/data/com.tencent.mm/shared_prefs/ 2>&1 | grep -i wxbridge; " +
+                        "D=\$(ls -d /data/user/0/com.tencent.mm /data/data/com.tencent.mm 2>/dev/null | head -1); " +
+                        "echo \"data dir = \$D\"; " +
+                        "ls -l \"\$D/shared_prefs/\" 2>&1 | grep -i wxbridge; " +
                         "echo '--- files/wxbridge ---'; " +
-                        "ls -l /data/data/com.tencent.mm/files/wxbridge/ 2>&1",
+                        "ls -l \"\$D/files/wxbridge/\" 2>&1",
                     15
                 )
             }

@@ -13,7 +13,14 @@ import org.json.JSONObject
  */
 object WxKeyReader {
 
-    private const val PREFS_XML = "/data/data/com.tencent.mm/shared_prefs/wxbridge.xml"
+    /** 依次尝试多个路径，返回第一个能读到的内容 */
+    private fun readFirst(paths: List<String>): String? {
+        for (p in paths) {
+            val t = RootShell.readText(p)
+            if (t != null && t.isNotBlank()) return t
+        }
+        return null
+    }
 
     data class WxKey(
         /** 主库 EnMicroMsg.db 的绝对路径 */
@@ -58,9 +65,10 @@ object WxKeyReader {
             return Result.Fail("没有 root 权限")
         }
 
-        val xml = RootShell.readText(PREFS_XML)
+        val xml = readFirst(WxPaths.prefsFiles())
             ?: return Result.Fail(
-                "读不到 $PREFS_XML\n" +
+                "读不到密码文件，试过这些路径：\n" +
+                    WxPaths.prefsFiles().joinToString("\n") { "  · $it" } + "\n" +
                     "→ 确认 LSPosed 里模块已启用、作用域勾了微信\n" +
                     "→ 然后冷启动（强行停止后重开）微信"
             )

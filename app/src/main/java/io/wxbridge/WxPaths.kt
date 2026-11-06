@@ -7,7 +7,28 @@ object WxPaths {
 
     const val WX_PKG = "com.tencent.mm"
     const val WX_DATA = "/data/data/com.tencent.mm"
+
+    /** KernelSU 的 su 在全局 namespace 里能看到的那个写法 */
+    const val WX_DATA_USER = "/data/user/0/com.tencent.mm"
     const val MICRO_MSG = "$WX_DATA/MicroMsg"
+
+    /**
+     * 微信数据目录的候选路径，按命中概率排序。
+     *
+     * 8.0.79 实测：App 通过 su 跑的 shell 处在 KernelSU 的全局 mount namespace 里，
+     * 那里 `/data/data/com.tencent.mm` 报的是 **No such file or directory**（不是权限拒绝），
+     * 而 `/data/user/0/com.tencent.mm` 才真实存在。两者在普通进程里是同一个目录，
+     * 只是命名空间不同 —— 所以这里不能写死一个。
+     */
+    fun wxDataDirs(): List<String> = listOf(
+        "/data/user/0/$WX_PKG",
+        "/data/data/$WX_PKG",
+        "/data/user_de/0/$WX_PKG"
+    )
+
+    fun microMsgDirs(): List<String> = wxDataDirs().map { "$it/MicroMsg" }
+
+    fun prefsFiles(): List<String> = wxDataDirs().map { "$it/shared_prefs/wxbridge.xml" }
 
     /**
      * 旧版（8.0.7x 及更早）的主库文件名。

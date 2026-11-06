@@ -118,18 +118,32 @@ data class AutoReplyConfig(
  * 配置与日志的落点。都在微信自己的私有目录里：
  * App 用 su 写，微信进程读；日志反过来。
  * 不走 /sdcard 是因为 Android 11+ 上第三方 App 读写别人的 media 目录不可靠。
+ *
+ * 注意这里刻意分成两套：
+ * - `*_MODULE` 给微信进程内的模块用，微信读自己的目录，两种写法都指向同一个地址
+ * - `*App()`  给主 App 用，它通过 su 执行，而 KernelSU 的 su 处在全局 mount namespace，
+ *   `/data/data/com.tencent.mm` 在那里是 No such file（不是权限问题），必须运行时探测
  */
 object AutoReplyPaths {
-    const val DIR = "/data/data/com.tencent.mm/files/wxbridge"
-    const val CFG = "$DIR/cfg.json"
-    const val LOG = "$DIR/reply.log"
+    const val DIR_MODULE = WxPaths.WX_DATA_USER + "/files/wxbridge"
+    const val CFG_MODULE = DIR_MODULE + "/cfg.json"
+    const val LOG_MODULE = DIR_MODULE + "/reply.log"
+
+    /** 老写法，模块读配置时兜底 */
+    const val CFG_LEGACY = WxPaths.WX_DATA + "/files/wxbridge/cfg.json"
+
+    fun dirApp(): String = "${RootShell.wxData()}/files/wxbridge"
+    fun cfgApp(): String = "${dirApp()}/cfg.json"
+    fun logApp(): String = "${dirApp()}/reply.log"
 }
 
 /** App 侧读写（全部走 root） */
 object AutoReplyStore {
 
     fun load(): AutoReplyConfig? {
-        val raw = RootShell.readText(AutoReplyPaths.CFG) ?: return null
+        val raw = RootShell.readText(AutoReplyPaths.cfgApp())
+            ?: RootShell.readText(AutoReplyPaths.CFG_LEGACY)
+            ?: return null
         return AutoReplyConfig.fromJson(raw)
     }
 
@@ -137,8 +151,11 @@ object AutoReplyStore {
      * 写入微信目录。
      *
      * 以前是先写 /data/local/tmp 再 cp 过去 —— 但那个目录是 0711 shell:shell，
-     * 普通 App 根本创建不了文件，所以必然失败。现在改成把 JSON 通过 stdin
-     * 直接喂给 `cat >`，既不依赖中转文件，也不用操心引号转义。
+     * 普通 App 根本创建不了文件，所以必然失败。后来改成 stdin 直接喂给 `cat >`。
+     *
+     * 还有一处必须注意：路径不能写死 /data/data/...，KernelSU 的 su 在全局
+     * mount namespace 里看不到那个形态，`mkdir -p` 会凭空建出一个空的
+     * /data/data/com.tencent.mm 目录，微信永远读不到。所以用 RootShell.wxData() 探测。
      *
      * @return null 表示成功，非 null 是失败原因（直接展示给用户）
      */
@@ -146,17 +163,20 @@ object AutoReplyStore {
         if (!RootShell.hasRoot()) return "没有 root 权限"
 
         val json = cfg.toJson()
-        val wxUid = "chown \$(stat -c '%u:%g' '/data/data/com.tencent.mm')"
+        val dir = AutoReplyPaths.dirApp()
+        val cfgFile = AutoReplyPaths.cfgApp()
+        val wxData = RootShell.wxData()
+        val wxUid = "chown \$(stat -c '%u:%g' '$wxData')"
 
         // 三件事必须一起做，少一件都会让微信进程读不到或写不了：
         //   1. 目录和文件属主改成微信自己的 uid —— 否则微信建不了 reply.log
         //   2. restorecon 修正 SELinux 上下文 —— root 建的文件 MLS 分类可能对不上
         //   3. chmod 兜底，防止某些 ROM 的 umask 把权限压掉
-        val cmd = "mkdir -p '${AutoReplyPaths.DIR}' && " +
-            "$wxUid '${AutoReplyPaths.DIR}' && chmod 771 '${AutoReplyPaths.DIR}' && " +
-            "cat > '${AutoReplyPaths.CFG}' && " +
-            "$wxUid '${AutoReplyPaths.CFG}' && chmod 664 '${AutoReplyPaths.CFG}' && " +
-            "(restorecon -R '${AutoReplyPaths.DIR}' 2>/dev/null || true) && " +
+        val cmd = "mkdir -p '$dir' && " +
+            "$wxUid '$dir' && chmod 771 '$dir' && " +
+            "cat > '$cfgFile' && " +
+            "$wxUid '$cfgFile' && chmod 664 '$cfgFile' && " +
+            "(restorecon -R '$dir' 2>/dev/null || true) && " +
             "echo __OK__"
 
         val r = RootShell.execWithInput(cmd, json, 20)
@@ -173,10 +193,10 @@ object AutoReplyStore {
     }
 
     fun readLog(tailLines: Int = 200): String {
-        val r = RootShell.exec("tail -n $tailLines '${AutoReplyPaths.LOG}' 2>/dev/null", 10)
+        val r = RootShell.exec("tail -n $tailLines '${AutoReplyPaths.logApp()}' 2>/dev/null", 10)
         return r.out
     }
 
     fun clearLog(): Boolean =
-        RootShell.exec(": > '${AutoReplyPaths.LOG}' && echo OK", 10).out.contains("OK")
+        RootShell.exec(": > '${AutoReplyPaths.logApp()}' && echo OK", 10).out.contains("OK")
 }
