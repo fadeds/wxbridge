@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标前景层：对话气泡 + 星芒 + 底部三个功能图标。
+  整体缩到 0.88 —— 自适应图标的可见区域是中心 72dp（圆形遮罩），
+  原图底部那排图标按原比例会贴到遮罩边缘被切掉。
+  VectorDrawable 不支持 feDropShadow，阴影去掉了，不影响识别。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+
+    <group
+        android:pivotX="512"
+        android:pivotY="512"
+        android:scaleX="0.88"
+        android:scaleY="0.88">
+
+        <!-- 气泡 -->
+        <path
+            android:pathData="M 340 210 H 700 A 100 100 0 0 1 800 310 V 490 A 100 100 0 0 1 700 590 H 440 L 320 688 L 340 590 A 100 100 0 0 1 240 490 V 310 A 100 100 0 0 1 340 210 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0"
+                    android:startY="210"
+                    android:endX="0"
+                    android:endY="688">
+                    <item android:offset="0" android:color="#FFFFFFFF" />
+                    <item android:offset="1" android:color="#FFECFDF5" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- 主星芒 -->
+        <path android:pathData="M 520 260 L 553 357 L 650 390 L 553 423 L 520 520 L 487 423 L 390 390 L 487 357 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="390"
+                    android:startY="260"
+                    android:endX="650"
+                    android:endY="520">
+                    <item android:offset="0" android:color="#FF07C160" />
+                    <item android:offset="1" android:color="#FF0EA5E9" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- 辅星芒 -->
+        <path
+            android:pathData="M 620 255 L 631 289 L 665 300 L 631 311 L 620 345 L 609 311 L 575 300 L 609 289 Z"
+            android:fillColor="#FF0891B2" />
+
+        <!-- 底部：文字 / 表情 / 图片 -->
+
+        <!-- T -->
+        <path
+            android:pathData="M 344 762 H 416"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="16"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M 380 762 V 832"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="16"
+            android:strokeLineCap="round" />
+
+        <!-- 笑脸 -->
+        <path
+            android:pathData="M476,792 a44,44 0 1,0 88,0 a44,44 0 1,0 -88,0"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="10" />
+        <path
+            android:pathData="M 500 808 Q 520 828 540 808"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="10"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M500,782 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0"
+            android:fillColor="#FFFFFFFF" />
+        <path
+            android:pathData="M530,782 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0"
+            android:fillColor="#FFFFFFFF" />
+
+        <!-- 图片框 -->
+        <path
+            android:pathData="M636,758 H684 A12,12 0 0 1 696,770 V810 A12,12 0 0 1 684,822 H636 A12,12 0 0 1 624,810 V770 A12,12 0 0 1 636,758 Z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="10" />
+        <path
+            android:pathData="M 632 810 L 652 786 L 666 802 L 676 792 L 690 810"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="10"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M644,778 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0"
+            android:fillColor="#FFFFFFFF" />
+    </group>
+</vector>

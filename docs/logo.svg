@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#07C160"/><stop offset="50%" stop-color="#0BBF8A"/><stop offset="100%" stop-color="#06B6D4"/>
+</linearGradient>
+<linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#FFFFFF"/><stop offset="100%" stop-color="#ECFDF5"/>
+</linearGradient>
+<linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#07C160"/><stop offset="100%" stop-color="#0EA5E9"/>
+</linearGradient>
+<filter id="sh" x="-25%" y="-25%" width="150%" height="150%">
+<feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#064E3B" flood-opacity="0.30"/>
+</filter>
+<filter id="sh2" x="-40%" y="-40%" width="180%" height="180%">
+<feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#064E3B" flood-opacity="0.25"/>
+</filter>
+</defs>
+<rect x="64" y="64" width="896" height="896" rx="216" fill="url(#bg)"/>
+<ellipse cx="330" cy="220" rx="340" ry="200" fill="#FFFFFF" opacity="0.12"/>
+<g filter="url(#sh)">
+<path d="M 340 210 H 700 A 100 100 0 0 1 800 310 V 490 A 100 100 0 0 1 700 590 H 440 L 320 688 L 340 590 A 100 100 0 0 1 240 490 V 310 A 100 100 0 0 1 340 210 Z" fill="url(#bubble)"/>
+</g>
+<g filter="url(#sh2)">
+<path d="M 520 260 L 553 357 L 650 390 L 553 423 L 520 520 L 487 423 L 390 390 L 487 357 Z" fill="url(#spark)"/>
+<path d="M 620 255 L 631 289 L 665 300 L 631 311 L 620 345 L 609 311 L 575 300 L 609 289 Z" fill="#0891B2"/>
+</g>
+<g stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" fill="none">
+<g stroke-width="16"><path d="M 344 762 H 416"/><path d="M 380 762 V 832"/></g>
+<g stroke-width="10"><circle cx="520" cy="792" r="44"/><path d="M 500 808 Q 520 828 540 808"/></g>
+<circle cx="505" cy="782" r="5" fill="#FFFFFF" stroke="none"/>
+<circle cx="535" cy="782" r="5" fill="#FFFFFF" stroke="none"/>
+<g stroke-width="10">
+<rect x="624" y="758" width="72" height="64" rx="12"/>
+<path d="M 632 810 L 652 786 L 666 802 L 676 792 L 690 810"/>
+</g>
+<circle cx="650" cy="778" r="6" fill="#FFFFFF" stroke="none"/>
+</g>
+</svg>
