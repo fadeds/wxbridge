@@ -131,7 +131,7 @@ object RootShell {
      *
      * 用户号从进程 uid 反推：uid / 100000 = userId（u999_a15 → 99901015 → 999）。
      */
-    fun wxCandidates(): List<String> = wxCandidatesOf().first
+    fun wxCandidates(): List<String> = wxCandidatesOf().candidates
 
     /**
      * 一次算完：候选列表 + 每个微信进程的 (pid, userId)。
