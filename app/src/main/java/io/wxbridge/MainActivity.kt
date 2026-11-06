@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.os.Bundle
 import android.text.InputType
+import android.util.Log
 import android.text.method.ScrollingMovementMethod
 import android.view.Gravity
 import android.view.View
@@ -34,6 +35,10 @@ import java.io.File
  * 刻意不用 Compose —— 少一层依赖，模块 APK 越薄越好。
  */
 class MainActivity : Activity() {
+
+    private companion object {
+        const val LOG_TAG = "WxBridgeApp"
+    }
 
     private lateinit var logView: TextView
     private lateinit var presetSpinner: Spinner
@@ -739,6 +744,8 @@ class MainActivity : Activity() {
     }
 
     private fun log(msg: String) {
+        // 同时写 logcat：界面日志区要滚动才看得见，adb 远程排查全靠这一份
+        runCatching { Log.i(LOG_TAG, msg) }
         runOnUiThread {
             logBuf.append(msg).append('\n')
             if (logBuf.length > 60_000) logBuf.delete(0, logBuf.length - 40_000)
