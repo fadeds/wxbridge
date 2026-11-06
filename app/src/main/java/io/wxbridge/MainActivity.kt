@@ -17,7 +17,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
-import android.widget.Toast
 import io.wxbridge.db.ImageResolver
 import io.wxbridge.db.WxDatabase
 import io.wxbridge.llm.LlmClient
@@ -73,14 +72,26 @@ class MainActivity : Activity() {
     private var busy = false
     private var suppressPresetCallback = false
 
+    /** 上次成功写入微信目录的自动回复配置，用来判断 onPause 时要不要再同步 */
+    @Volatile
+    private var lastSyncedJson: String? = null
+
     private val cfg by lazy { getSharedPreferences("cfg", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(buildUi())
-        restoreConfig()
+        restoreAllUi()
         log("WxBridge v${BuildConfig.VERSION_NAME}")
         log("顺序：① 环境自检 → ② 读取密钥 → ③ 打开数据库 → ④ 生成摘要")
+        log("配置改动会自动保存；自动回复写进微信目录，点「保存全部配置」才生效")
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 每次离开页面都落盘，避免「填完没点保存直接退出」丢配置
+        persistAllUi()
+        syncAutoReplyQuietly()
     }
 
     override fun onDestroy() {
@@ -91,11 +102,19 @@ class MainActivity : Activity() {
 
     // ---------------- UI ----------------
 
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
     private fun buildUi(): View {
+        // 整页套一层 ScrollView。之前只给日志区套了 ScrollView，
+        // 配置控件全堆在外面，控件一多底部就够不着了。
+        val page = ScrollView(this).apply { isFillViewport = true }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 56, 40, 32)
         }
+        page.addView(root)
+
+        root.addView(actionRow("保存全部配置" to { saveAllConfig() }))
 
         root.addView(sectionTitle("模型"))
         presetSpinner = Spinner(this).apply {
@@ -225,18 +244,30 @@ class MainActivity : Activity() {
             "下载并安装" to { doDownloadUpdate() }
         ))
 
+        root.addView(sectionTitle("运行日志"))
         logView = TextView(this).apply {
             textSize = 11f
             setTextIsSelectable(true)
             movementMethod = ScrollingMovementMethod()
-            setPadding(0, 24, 0, 0)
+            // 外层已经有 ScrollView，这里靠固定高度 + 自身滚动。
+            // 触摸时临时禁止所有父级拦截，否则在日志区滑动会被外层抢走。
+            setOnTouchListener { v, _ ->
+                var p = v.parent
+                while (p != null) {
+                    p.requestDisallowInterceptTouchEvent(true)
+                    p = p.parent
+                }
+                false
+            }
         }
-        root.addView(
-            ScrollView(this).apply { addView(logView) },
-            LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f)
-        )
+        root.addView(logView, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(260)))
 
-        return root
+        root.addView(actionRow("清空日志" to {
+            logBuf.setLength(0)
+            logView.text = ""
+        }))
+
+        return page
     }
 
     private fun sectionTitle(t: String) = TextView(this).apply {
@@ -359,7 +390,7 @@ class MainActivity : Activity() {
             return
         }
 
-        saveConfig(base, apiKey, textModel, visionModel, hours, maxImages)
+        persistAllUi()
 
         launchStep("生成摘要") {
             val useVision = cbVlm.isChecked && visionModel.isNotBlank()
@@ -426,13 +457,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun saveAutoReply() {
+    /** 从界面当前状态构建自动回复配置 */
+    private fun currentAutoReplyConfig(): AutoReplyConfig {
         val whitelist = etWhitelist.text.toString()
             .split('\n', ',', '，', ' ', '；')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-        val conf = AutoReplyConfig(
+        return AutoReplyConfig(
             enabled = cbAuto.isChecked,
             baseUrl = etBase.text.toString().trim(),
             apiKey = etKey.text.toString().trim(),
@@ -451,21 +483,46 @@ class MainActivity : Activity() {
             autoStickerReply = cbAutoSticker.isChecked,
             stickerChance = etStickerChance.text.toString().toIntOrNull() ?: 50
         )
+    }
 
-        if (conf.enabled && conf.onlyWhitelist && whitelist.isEmpty()) {
+    private fun warnAutoReply(conf: AutoReplyConfig) {
+        if (!conf.enabled) return
+        if (conf.onlyWhitelist && conf.whitelist.isEmpty()) {
             log("！开了「只回白名单」但名单是空的，任何消息都不会回")
         }
-        if (conf.enabled && conf.replyGroupAt && conf.myGroupNickname.isBlank()) {
+        if (conf.replyGroupAt && conf.myGroupNickname.isBlank()) {
             log("！群聊 @ 回复必须填「我的群昵称」，否则群消息全部跳过")
         }
-        if (conf.enabled && conf.apiKey.isBlank()) {
-            log("！没有 API Key，回复会失败")
+        if (conf.apiKey.isBlank()) log("！没有 API Key，回复会失败")
+    }
+
+    /** 顶部按钮：界面配置和自动回复配置一起落盘 */
+    private fun saveAllConfig() {
+        val conf = currentAutoReplyConfig()
+        persistAllUi()
+        warnAutoReply(conf)
+
+        launchStep("保存配置") {
+            val ok = withContext(Dispatchers.IO) { AutoReplyStore.save(conf) }
+            if (ok) {
+                lastSyncedJson = conf.toJson()
+                log("界面配置已保存")
+                log("自动回复配置已写入 ${AutoReplyPaths.CFG}，微信进程约 4 秒内重新加载")
+            } else {
+                log("界面配置已保存，但写入微信目录失败 —— 检查 root 授权")
+            }
         }
+    }
+
+    private fun saveAutoReply() {
+        val conf = currentAutoReplyConfig()
+        warnAutoReply(conf)
 
         launchStep("保存自动回复") {
             val ok = withContext(Dispatchers.IO) { AutoReplyStore.save(conf) }
-            persistAutoReplyUi()
+            persistAllUi()
             if (ok) {
+                lastSyncedJson = conf.toJson()
                 log("已写入 ${AutoReplyPaths.CFG}")
                 log("微信进程约 4 秒内重新加载配置")
                 if (conf.enabled) log("建议先把自己小号放进白名单试一条，别直接开全量")
@@ -475,6 +532,20 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * onPause 时静默同步。
+     * 只写 App 私有 prefs 是 Instant 的；写微信目录要 su，所以放在后台线程，
+     * 失败也不打扰用户 —— 主路径仍然是「保存全部配置」按钮。
+     */
+    private fun syncAutoReplyQuietly() {
+        val conf = runCatching { currentAutoReplyConfig() }.getOrNull() ?: return
+        val json = conf.toJson()
+        if (json == lastSyncedJson) return
+        Thread {
+            if (AutoReplyStore.save(conf)) lastSyncedJson = json
+        }.apply { isDaemon = true }.start()
+    }
+
     private fun showAutoReplyLog() {
         launchStep("回复日志") {
             val t = withContext(Dispatchers.IO) { AutoReplyStore.readLog(150) }
@@ -482,8 +553,20 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun persistAutoReplyUi() {
+    /** 所有界面状态落盘到 App 自己的 SharedPreferences，不涉及 root，可以随时调用 */
+    private fun persistAllUi() {
+        val presetIndex = presetSpinner.selectedItemPosition
+            .coerceIn(0, ModelPresets.ALL.size - 1)
+
         cfg.edit()
+            .putString("preset", ModelPresets.ALL[presetIndex].id)
+            .putString("base", etBase.text.toString().trim())
+            .putString("key", etKey.text.toString().trim())
+            .putString("textModel", etTextModel.text.toString().trim())
+            .putString("visionModel", etVisionModel.text.toString().trim())
+            .putInt("hours", etHours.text.toString().toIntOrNull() ?: 24)
+            .putInt("maxImages", etMaxImages.text.toString().toIntOrNull() ?: 20)
+            .putBoolean("vlm", cbVlm.isChecked)
             .putBoolean("ar_enabled", cbAuto.isChecked)
             .putBoolean("ar_private", cbAutoPrivate.isChecked)
             .putBoolean("ar_group", cbAutoGroup.isChecked)
@@ -498,6 +581,7 @@ class MainActivity : Activity() {
             .putInt("ar_max", etMaxDelay.text.toString().toIntOrNull() ?: 12)
             .putInt("ar_cool", etCooldown.text.toString().toIntOrNull() ?: 180)
             .putInt("ar_limit", etDailyLimit.text.toString().toIntOrNull() ?: 100)
+            .putString("gh_token", etGhToken.text.toString().trim())
             .apply()
     }
 
@@ -582,7 +666,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun restoreConfig() {
+    private fun restoreAllUi() {
         val presetId = cfg.getString("preset", "deepseek") ?: "deepseek"
         val idx = ModelPresets.ALL.indexOfFirst { it.id == presetId }.coerceAtLeast(0)
 
@@ -615,22 +699,5 @@ class MainActivity : Activity() {
         etCooldown.setText(cfg.getInt("ar_cool", 180).toString())
         etDailyLimit.setText(cfg.getInt("ar_limit", 100).toString())
         etGhToken.setText(cfg.getString("gh_token", ""))
-    }
-
-    private fun saveConfig(
-        base: String, key: String, textModel: String,
-        visionModel: String, hours: Int, maxImages: Int
-    ) {
-        cfg.edit()
-            .putString("preset", ModelPresets.ALL[presetSpinner.selectedItemPosition].id)
-            .putString("base", base)
-            .putString("key", key)
-            .putString("textModel", textModel)
-            .putString("visionModel", visionModel)
-            .putInt("hours", hours)
-            .putInt("maxImages", maxImages)
-            .putBoolean("vlm", cbVlm.isChecked)
-            .apply()
-        Toast.makeText(this, "配置已保存", Toast.LENGTH_SHORT).show()
     }
 }
