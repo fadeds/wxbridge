@@ -32,15 +32,35 @@ android {
         versionName = buildVersionName
     }
 
+    /**
+     * 固定调试签名。
+     *
+     * GitHub Actions 的 runner 每次都是干净的，AGP 会自动生成一个随机 debug keystore，
+     * 导致相邻两个版本的签名不同，用户装新版时会报「签名不一致」，只能卸载重装。
+     *
+     * 所以把签名固定成仓库里这个 PKCS12 文件。这是调试用途的密钥，
+     * 密码就是 android/android，谁都能用 —— 只用来保证覆盖安装，
+     * 不能拿它上架应用商店。
+     */
+    signingConfigs {
+        create("stable") {
+            storeFile = file("keystore/wxbridge.p12")
+            storePassword = "android"
+            keyAlias = "wxbridge"
+            keyPassword = "android"
+            storeType = "PKCS12"
+        }
+    }
+
     buildTypes {
         debug {
             versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("stable")
         }
         release {
             isMinifyEnabled = false
-            // 模块要装到手机上调试，release 也用 debug 签名，省一次 keystore 配置。
-            // 如果要上架应用商店，换成自己的 signingConfig。
-            signingConfig = signingConfigs.getByName("debug")
+            // 用固定签名，保证每次 CI 构建出来的包可以互相覆盖安装
+            signingConfig = signingConfigs.getByName("stable")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

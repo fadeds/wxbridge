@@ -699,5 +699,35 @@ class MainActivity : Activity() {
         etCooldown.setText(cfg.getInt("ar_cool", 180).toString())
         etDailyLimit.setText(cfg.getInt("ar_limit", 100).toString())
         etGhToken.setText(cfg.getString("gh_token", ""))
+
+        // 首次启动（本地没有任何配置记录）时，尝试从微信目录导入。
+        // 重装后 App 的 prefs 会清空，但微信那边的 cfg.json 还在跑，
+        // 不导入的话 UI 会显示「已关闭」而实际仍在自动回复。
+        if (!cfg.contains("preset")) {
+            Thread {
+                val remote = runCatching { AutoReplyStore.load() }.getOrNull()
+                if (remote != null) runOnUiThread { applyImportedAutoReply(remote) }
+            }.apply { isDaemon = true }.start()
+        }
+    }
+
+    private fun applyImportedAutoReply(c: AutoReplyConfig) {
+        cbAuto.isChecked = c.enabled
+        cbAutoPrivate.isChecked = c.replyPrivate
+        cbAutoGroup.isChecked = c.replyGroupAt
+        cbAutoWhitelistOnly.isChecked = c.onlyWhitelist
+        cbAllowEmoji.isChecked = c.allowEmoji
+        cbAutoSticker.isChecked = c.autoStickerReply
+        etStickerChance.setText(c.stickerChance.toString())
+        etMyNick.setText(c.myGroupNickname)
+        etWhitelist.setText(c.whitelist.joinToString("\n"))
+        etCtxCount.setText(c.contextCount.toString())
+        etMinDelay.setText(c.minDelaySec.toString())
+        etMaxDelay.setText(c.maxDelaySec.toString())
+        etCooldown.setText(c.cooldownSec.toString())
+        etDailyLimit.setText(c.dailyLimit.toString())
+
+        persistAllUi()
+        log("已从微信目录导入自动回复配置，和实际生效状态对齐")
     }
 }
