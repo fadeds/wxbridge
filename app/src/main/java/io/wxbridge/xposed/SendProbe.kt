@@ -49,6 +49,7 @@ internal object SendProbe {
 
         hookSendClick()
         hookSendButtonListener(cl)
+        scanChatPackage(cl)
     }
 
     /**
@@ -76,7 +77,7 @@ internal object SendProbe {
                         if (onClickLogsLeft <= 0) return
                         onClickLogsLeft--
                         xlog("SendProbe SEND onClick: ${c.name}#onClick")
-                        Thread.currentThread().stackTrace.take(frames).forEach { xlog("    at $it") }
+                        dumpListenerFields(param.thisObject)
                     }
                 })
                 n++
@@ -86,6 +87,80 @@ internal object SendProbe {
     }
 
     private var onClickLogsLeft = 3
+
+    /**
+     * 扫 `com.tencent.mm.pluginsdk.ui.chat` 包。
+     *
+     * 这个包名没有被混淆（不是单字母），发送相关的类很可能都在里面。
+     * 同时列出「带 2 个以上 String 参数」的方法 —— 发送必然要 talker + content。
+     */
+    private fun scanChatPackage(cl: ClassLoader) {
+        val names = runCatching { dexClasses(cl) }.getOrElse {
+            xlog("SendProbe: 枚举 dex 失败 $it")
+            return
+        }
+        val targets = names.filter { it.startsWith("com.tencent.mm.pluginsdk.ui.chat") }
+        xlog("SendProbe: pluginsdk.ui.chat 下 ${targets.size} 个类")
+        targets.forEach { xlog("SendProbe 类: $it") }
+
+        var shown = 0
+        for (name in targets) {
+            if (shown >= 30) break
+            val c = runCatching { XposedHelpers.findClass(name, cl) }.getOrNull() ?: continue
+            for (m in c.declaredMethods) {
+                if (shown >= 30) break
+                val p = m.parameterTypes
+                val strings = p.count { it == String::class.java }
+                if (strings < 2) continue
+                shown++
+                xlog("SendProbe 方法: ${c.name}#${m.name}(${p.joinToString { it.simpleName }}) static=${Modifier.isStatic(m.modifiers)}")
+            }
+        }
+    }
+
+    /** BaseDexClassLoader.pathList.dexElements[].dexFile.entries() */
+    private fun dexClasses(cl: ClassLoader): List<String> {
+        val out = ArrayList<String>(8192)
+        val pathList = XposedHelpers.getObjectField(cl, "pathList")
+        val elements = XposedHelpers.getObjectField(pathList, "dexElements") as Array<*>
+        for (el in elements) {
+            if (el == null) continue
+            val df = runCatching {
+                XposedHelpers.getObjectField(el, "dexFile") as? dalvik.system.DexFile
+            }.getOrNull() ?: continue
+            val en = df.entries()
+            while (en.hasMoreElements()) {
+                (en.nextElement() as? String)?.let { out += it }
+            }
+        }
+        return out
+    }
+
+    /** 把监听器对象的字段挖出来 —— 它多半持有 chat footer / context，发送 API 在那边 */
+    private fun dumpListenerFields(obj: Any) {
+        runCatching {
+            val c = obj.javaClass
+            xlog("SendProbe 监听器字段: ${c.name}")
+            var n = 0
+            var f = c
+            while (f != null && n < 24) {
+                for (field in f.declaredFields) {
+                    if (n >= 24) break
+                    if (Modifier.isStatic(field.modifiers)) continue
+                    field.isAccessible = true
+                    val v = runCatching { field.get(obj) }.getOrNull()
+                    val desc = when (v) {
+                        null -> "null"
+                        is String -> "\"${v.take(30)}\""
+                        else -> v.javaClass.name
+                    }
+                    xlog("    ${field.name}: ${field.type.simpleName} = $desc")
+                    n++
+                }
+                f = f.superclass
+            }
+        }.onFailure { xlog("SendProbe: dump 字段失败 ${it.message}") }
+    }
 
     /**
      * 发送走的协程在存储层之前就切到了线程池，insert 的栈里看不到 UI。
