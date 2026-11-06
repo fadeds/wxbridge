@@ -79,7 +79,9 @@ internal object AutoReplyEngine {
         }
         executor = ex
 
-        hookActive = NewMessageHook.install(cl) { cv ->
+        hookActive = NewMessageHook.install(cl) { db, cv ->
+            // 同一个回调里顺手把库实例交给数据桥 —— 这就是消息主库，不用再猜
+            runCatching { DataBridge.provideDb(db) }
             // hook 回调跑在微信的 DB 线程上，必须立刻返回，不能在这里做任何耗时操作
             ex.submit { runCatching { onInsert(cv) }.onFailure { xlog("onInsert error: $it") } }
         }

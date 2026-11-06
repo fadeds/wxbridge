@@ -178,7 +178,8 @@ class MainActivity : Activity() {
             "④ 生成摘要" to { doSummarize() }
         ))
         root.addView(actionRow(
-            "⑤ 库结构扫描" to { doScanDbs() }
+            "⑤ 库结构扫描" to { doScanDbs() },
+            "⑥ 模块查询" to { doBridgeCheck() }
         ))
 
         root.addView(sectionTitle("自动回复（写操作 · 有封号风险）"))
@@ -421,6 +422,37 @@ class MainActivity : Activity() {
             if (out.imageStats.isNotBlank()) log("图片：${out.imageStats}")
             log("======== 摘要 ========")
             log(out.text)
+        }
+    }
+
+    /**
+     * 走模块内查询（广播），不需要 root、不需要读微信目录。
+     *
+     * 先发空 SQL 做自检：确认桥通了、库实例拿到了、有哪些表；
+     * 再查 3 条 message 验证字段。这一步通了，整条数据面就可以从
+     * 「su 复制库 + SQLCipher 解密」换成「模块内直接查」。
+     */
+    private fun doBridgeCheck() {
+        launchStep("模块查询") {
+            log("向微信进程发广播…")
+            val self = withContext(Dispatchers.IO) { ModuleBridge.query(this@MainActivity, "") }
+            when (self) {
+                is ModuleBridge.Result.Fail -> {
+                    log("失败：${self.reason}")
+                    return@launchStep
+                }
+                is ModuleBridge.Result.Ok -> log("自检：${self.json.take(1500)}")
+            }
+
+            val sql = "SELECT * FROM message ORDER BY rowid DESC LIMIT 3"
+            log("SQL: $sql")
+            when (val r = withContext(Dispatchers.IO) { ModuleBridge.query(this@MainActivity, sql) }) {
+                is ModuleBridge.Result.Ok -> {
+                    log("返回 ${r.json.length} 字节")
+                    log(r.json.take(2500))
+                }
+                is ModuleBridge.Result.Fail -> log("查询失败：${r.reason}")
+            }
         }
     }
 

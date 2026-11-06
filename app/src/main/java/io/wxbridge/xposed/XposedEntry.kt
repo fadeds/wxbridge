@@ -57,7 +57,11 @@ class XposedEntry : IXposedHookLoadPackage {
                 Context::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        (param.args.getOrNull(0) as? Context)?.let { KeyBridge.attach(it) }
+                        (param.args.getOrNull(0) as? Context)?.let {
+                            KeyBridge.attach(it)
+                            // 数据桥也用这个 Context 注册广播监听
+                            DataBridge.attach(it)
+                        }
                     }
                 }
             )

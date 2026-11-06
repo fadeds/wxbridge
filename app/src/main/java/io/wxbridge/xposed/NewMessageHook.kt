@@ -32,7 +32,7 @@ internal object NewMessageHook {
     /** 触发计数，前几次打日志确认 insert 真的被调用 */
     private var hits = 0
 
-    fun install(cl: ClassLoader, onMessage: (ContentValues) -> Unit): Boolean {
+    fun install(cl: ClassLoader, onMessage: (Any, ContentValues) -> Unit): Boolean {
         val callback = object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val args = param.args ?: return
@@ -48,8 +48,11 @@ internal object NewMessageHook {
                     xlog("message insert #$hits talker=$talker")
                 }
 
-                runCatching { onMessage(values) }
-                    .onFailure { xlog("NewMessageHook callback error: $it") }
+                val dbInstance = param.thisObject
+                if (dbInstance != null) {
+                    runCatching { onMessage(dbInstance, values) }
+                        .onFailure { xlog("NewMessageHook callback error: $it") }
+                }
             }
         }
 
