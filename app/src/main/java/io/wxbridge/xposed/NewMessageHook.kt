@@ -32,6 +32,9 @@ internal object NewMessageHook {
     /** 触发计数，前几次打日志确认 insert 真的被调用 */
     private var hits = 0
 
+    /** 还要 dump 几次「发送消息」的调用栈（学习发送入口用） */
+    private var sendStackLeft = 2
+
     fun install(cl: ClassLoader, onMessage: (Any, ContentValues) -> Unit): Boolean {
         val callback = object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
@@ -41,6 +44,16 @@ internal object NewMessageHook {
                 if (table != "message") return
 
                 val values = args.filterIsInstance<ContentValues>().firstOrNull() ?: return
+
+                // 手动发消息时 dump 一次调用栈：微信的发送入口被混淆成单字母，
+                // 与其猜类名，不如让用户自己发一条，从栈里读出真实的类和函数
+                if (sendStackLeft > 0 &&
+                    runCatching { values.getAsInteger("isSend") }.getOrNull() == 1
+                ) {
+                    sendStackLeft--
+                    xlog("=== 发送消息调用栈（手动发一条即可复现）===")
+                    Thread.currentThread().stackTrace.take(28).forEach { xlog("    at $it") }
+                }
 
                 if (hits < 5) {
                     hits++

@@ -59,6 +59,18 @@ internal object DataBridge {
         registerIfNeeded()
     }
 
+    /** 供自动回复引擎在微信进程内直接查库 */
+    fun currentDb(): Any? = db
+
+    /** 主库文件路径（SQLiteDatabase.getPath()），用来定位 MicroMsg 目录、表情包等 */
+    fun dbPath(): String? {
+        val d = db ?: return null
+        return runCatching {
+            d.javaClass.methods.firstOrNull { it.name == "getPath" && it.parameterCount == 0 }
+                ?.invoke(d) as? String
+        }.getOrNull()
+    }
+
     private fun registerIfNeeded() {
         val c = ctx ?: return
         if (registered) return

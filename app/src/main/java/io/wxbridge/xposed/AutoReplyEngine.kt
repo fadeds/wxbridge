@@ -201,7 +201,7 @@ internal object AutoReplyEngine {
     // ---------------- 文本回复 ----------------
 
     private fun replyText(m: Row, c: AutoReplyConfig) {
-        val db = WcdbKeyHook.mainDb
+        val db = DataBridge.currentDb() ?: WcdbKeyHook.mainDb
         val context = if (db != null) queryContext(db, m.talker, c.contextCount) else listOf(m)
         val dialogue = context.joinToString("\n") {
             "${if (it.isSend) "我" else "对方"}: ${render(it)}"
@@ -245,7 +245,7 @@ internal object AutoReplyEngine {
             log("表情发送入口不可用，跳过（看启动日志里的「表情=」）")
             return
         }
-        val pick = EmojiRepo.pickRandom(WcdbKeyHook.mainDbPath)
+        val pick = EmojiRepo.pickRandom(DataBridge.dbPath()?.substringBeforeLast('/') ?: WcdbKeyHook.mainDbPath)
         if (pick == null) {
             log("本地表情包为空，跳过。检查 MicroMsg/<md5>/emoji/ 是否存在")
             return
@@ -270,7 +270,7 @@ internal object AutoReplyEngine {
     private fun pollTick() {
         val c = loadCfg() ?: return
         if (!c.enabled) return
-        val db = WcdbKeyHook.mainDb ?: return
+        val db = DataBridge.currentDb() ?: WcdbKeyHook.mainDb ?: return
 
         if (lastMsgId == 0L) {
             lastMsgId = queryMaxId(db)
