@@ -55,23 +55,44 @@ jobs:
           if [ -x "$SDKM" ]; then yes | "$SDKM" --licenses > /dev/null 2>&1 || true; fi
 
       - name: Build release APK
+        id: build
+        # 失败不立即中断，先让下一步把错误行吐出来
+        continue-on-error: true
         run: |
+          set -o pipefail
           gradle :app:assembleRelease --no-daemon --stacktrace \
             -PversionName=${{ steps.ver.outputs.name }} \
-            -PversionCode=${{ steps.ver.outputs.code }}
+            -PversionCode=${{ steps.ver.outputs.code }} 2>&1 | tee build.log
+
+      # 构建失败时把关键错误行暴露成 annotation / summary。
+      # Actions 的原始日志接口需要 token 才能读，这样至少能定位到具体报错。
+      - name: Report build errors
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "## 构建失败" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -nE "^e: |^> Task .*FAILED|error:|What went wrong|Could not resolve|Could not find|Caused by:|Execution failed|Unresolved reference" build.log \
+            | head -40 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^e: |Could not resolve|Could not find|What went wrong|Execution failed|Unresolved reference" build.log \
+            | head -8 | while IFS= read -r line; do echo "::error::$line"; done
+
+      - name: Fail job if build failed
+        if: steps.build.outcome == 'failure'
+        run: exit 1
 
       - name: Rename APK
         run: |
           set -euo pipefail
           mkdir -p out
           SRC=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          cp "$SRC" "out/wx-ai-${{ steps.ver.outputs.name }}.apk"
+          cp "$SRC" "out/wxbridge-${{ steps.ver.outputs.name }}.apk"
           ls -lh out
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wx-ai-${{ steps.ver.outputs.name }}
+          name: wxbridge-${{ steps.ver.outputs.name }}
           path: out/*.apk
           retention-days: 30
 
