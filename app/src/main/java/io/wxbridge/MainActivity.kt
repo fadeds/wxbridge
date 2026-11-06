@@ -503,13 +503,13 @@ class MainActivity : Activity() {
         warnAutoReply(conf)
 
         launchStep("保存配置") {
-            val ok = withContext(Dispatchers.IO) { AutoReplyStore.save(conf) }
-            if (ok) {
+            val err = withContext(Dispatchers.IO) { AutoReplyStore.save(conf) }
+            if (err == null) {
                 lastSyncedJson = conf.toJson()
                 log("界面配置已保存")
                 log("自动回复配置已写入 ${AutoReplyPaths.CFG}，微信进程约 4 秒内重新加载")
             } else {
-                log("界面配置已保存，但写入微信目录失败 —— 检查 root 授权")
+                log("界面配置已保存（App 内），但写入微信目录失败：$err")
             }
         }
     }
@@ -519,15 +519,15 @@ class MainActivity : Activity() {
         warnAutoReply(conf)
 
         launchStep("保存自动回复") {
-            val ok = withContext(Dispatchers.IO) { AutoReplyStore.save(conf) }
+            val err = withContext(Dispatchers.IO) { AutoReplyStore.save(conf) }
             persistAllUi()
-            if (ok) {
+            if (err == null) {
                 lastSyncedJson = conf.toJson()
                 log("已写入 ${AutoReplyPaths.CFG}")
                 log("微信进程约 4 秒内重新加载配置")
                 if (conf.enabled) log("建议先把自己小号放进白名单试一条，别直接开全量")
             } else {
-                log("写入失败 —— 检查 root 授权是否给了本 App")
+                log("写入失败：$err")
             }
         }
     }
@@ -542,7 +542,7 @@ class MainActivity : Activity() {
         val json = conf.toJson()
         if (json == lastSyncedJson) return
         Thread {
-            if (AutoReplyStore.save(conf)) lastSyncedJson = json
+            if (AutoReplyStore.save(conf) == null) lastSyncedJson = json
         }.apply { isDaemon = true }.start()
     }
 

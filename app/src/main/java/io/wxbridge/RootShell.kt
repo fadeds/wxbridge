@@ -67,6 +67,38 @@ object RootShell {
         return dst.exists() && dst.length() > 0
     }
 
+    /**
+     * 带 stdin 的执行。
+     *
+     * 写配置文件必须用这种方式：App 进程没有权限创建 /data/local/tmp 下的文件
+     * （那个目录是 0711 shell:shell），而把 JSON 拼进 shell 命令又要处理一堆引号转义。
+     * 用 `cat > file` 接 stdin 是最干净的做法。
+     */
+    fun execWithInput(cmd: String, input: String, timeoutSec: Long = 20): Result {
+        val p = ProcessBuilder("su", "-c", cmd).redirectErrorStream(false).start()
+        val out = StringBuilder()
+        val err = StringBuilder()
+
+        // 先起读线程，避免子进程输出把管道撑满导致死锁
+        val tOut = Thread { runCatching { out.append(p.inputStream.bufferedReader().readText()) } }
+        val tErr = Thread { runCatching { err.append(p.errorStream.bufferedReader().readText()) } }
+        tOut.start()
+        tErr.start()
+
+        runCatching {
+            p.outputStream.use { it.write(input.toByteArray(Charsets.UTF_8)) }
+        }
+
+        val finished = p.waitFor(timeoutSec, TimeUnit.SECONDS)
+        if (!finished) {
+            p.destroyForcibly()
+            return Result(-1, out.toString(), "timeout after ${timeoutSec}s")
+        }
+        tOut.join(1500)
+        tErr.join(1500)
+        return Result(p.exitValue(), out.toString(), err.toString())
+    }
+
     /** 列目录，返回文件名列表 */
     fun listDir(dir: String): List<String> {
         val r = exec("ls -1 '$dir' 2>/dev/null")

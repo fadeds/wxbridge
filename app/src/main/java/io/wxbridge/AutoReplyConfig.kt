@@ -123,11 +123,6 @@ object AutoReplyPaths {
     const val DIR = "/data/data/com.tencent.mm/files/wxbridge"
     const val CFG = "$DIR/cfg.json"
     const val LOG = "$DIR/reply.log"
-
-    /** 允许微信进程读 */
-    const val PREPARE_CMD =
-        "mkdir -p '$DIR' && chmod 771 '$DIR' && " +
-            "[ -f '$LOG' ] || : > '$LOG'; chmod 666 '$LOG' 2>/dev/null; true"
 }
 
 /** App 侧读写（全部走 root） */
@@ -138,21 +133,42 @@ object AutoReplyStore {
         return AutoReplyConfig.fromJson(raw)
     }
 
-    fun save(cfg: AutoReplyConfig): Boolean {
-        // 先落到 app 私有文件，再 root 拷过去 —— 避免引号转义地狱
-        val tmp = java.io.File("/data/local/tmp/wxbridge_cfg.json")
-        return try {
-            tmp.writeText(cfg.toJson())
-            val r = RootShell.exec(
-                "${AutoReplyPaths.PREPARE_CMD}; " +
-                    "cp -f '${tmp.absolutePath}' '${AutoReplyPaths.CFG}' && " +
-                    "chmod 664 '${AutoReplyPaths.CFG}' && echo OK",
-                15
-            )
-            tmp.delete()
-            r.out.contains("OK")
-        } catch (t: Throwable) {
-            false
+    /**
+     * 写入微信目录。
+     *
+     * 以前是先写 /data/local/tmp 再 cp 过去 —— 但那个目录是 0711 shell:shell，
+     * 普通 App 根本创建不了文件，所以必然失败。现在改成把 JSON 通过 stdin
+     * 直接喂给 `cat >`，既不依赖中转文件，也不用操心引号转义。
+     *
+     * @return null 表示成功，非 null 是失败原因（直接展示给用户）
+     */
+    fun save(cfg: AutoReplyConfig): String? {
+        if (!RootShell.hasRoot()) return "没有 root 权限"
+
+        val json = cfg.toJson()
+        val wxUid = "chown \$(stat -c '%u:%g' '/data/data/com.tencent.mm')"
+
+        // 三件事必须一起做，少一件都会让微信进程读不到或写不了：
+        //   1. 目录和文件属主改成微信自己的 uid —— 否则微信建不了 reply.log
+        //   2. restorecon 修正 SELinux 上下文 —— root 建的文件 MLS 分类可能对不上
+        //   3. chmod 兜底，防止某些 ROM 的 umask 把权限压掉
+        val cmd = "mkdir -p '${AutoReplyPaths.DIR}' && " +
+            "$wxUid '${AutoReplyPaths.DIR}' && chmod 771 '${AutoReplyPaths.DIR}' && " +
+            "cat > '${AutoReplyPaths.CFG}' && " +
+            "$wxUid '${AutoReplyPaths.CFG}' && chmod 664 '${AutoReplyPaths.CFG}' && " +
+            "(restorecon -R '${AutoReplyPaths.DIR}' 2>/dev/null || true) && " +
+            "echo __OK__"
+
+        val r = RootShell.execWithInput(cmd, json, 20)
+
+        return when {
+            r.out.contains("__OK__") -> null
+            r.code == -1 -> "执行超时，su 没有响应"
+            r.out.isBlank() && r.err.isBlank() ->
+                "su 没有任何输出 —— 检查 Magisk/KernelSU 是否授权了本 App"
+            r.err.contains("Permission denied") || r.out.contains("Permission denied") ->
+                "权限被拒绝：${(r.err + r.out).trim().take(200)}"
+            else -> "写入失败 (exit=${r.code})：${(r.err + r.out).trim().take(300)}"
         }
     }
 
