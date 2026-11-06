@@ -99,6 +99,28 @@ object RootShell {
         return Result(p.exitValue(), out.toString(), err.toString())
     }
 
+    /**
+     * root 全链路诊断。
+     *
+     * 背景：遇到过「id 返回 uid=0，但 ls 微信目录是空的」——
+     * 因为 listDir 把 stderr 丢进了 /dev/null，权限被拒时看起来只是「没有文件」。
+     * 这段不做任何过滤，把 uid / SELinux 上下文 / 真实报错全打出来。
+     */
+    fun diagnose(): String {
+        val cmd = """
+            echo '= uid ='; id 2>&1
+            echo '= 当前 SELinux 上下文 ='; cat /proc/self/attr/current 2>&1
+            echo '= getenforce ='; getenforce 2>&1
+            echo '= su 位置 ='; command -v su 2>&1
+            echo '= 微信目录 stat ='; ls -ld /data/data/com.tencent.mm 2>&1
+            echo '= MicroMsg 前几项 ='; ls -1 /data/data/com.tencent.mm/MicroMsg 2>&1 | head -5
+            echo '= shared_prefs 前几项 ='; ls -1 /data/data/com.tencent.mm/shared_prefs 2>&1 | head -5
+            echo '= mount namespace ='; readlink /proc/self/ns/mnt 2>&1
+        """.trimIndent()
+        val r = exec(cmd, 20)
+        return (r.out + if (r.err.isNotBlank()) "\n[stderr] ${r.err}" else "").trim()
+    }
+
     /** 列目录，返回文件名列表 */
     fun listDir(dir: String): List<String> {
         val r = exec("ls -1 '$dir' 2>/dev/null")

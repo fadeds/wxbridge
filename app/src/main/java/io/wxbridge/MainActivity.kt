@@ -317,23 +317,8 @@ class MainActivity : Activity() {
                 log("→ 没有 root，后面三步都走不通。先确认 Magisk/KernelSU 授权了本 App。")
                 return@launchStep
             }
-            val (ls, xml) = withContext(Dispatchers.IO) {
-                RootShell.listDir(WxPaths.MICRO_MSG) to
-                    RootShell.readText("/data/data/com.tencent.mm/shared_prefs/wxbridge.xml")
-            }
-            log("${WxPaths.MICRO_MSG} 下有 ${ls.size} 项")
-            if (ls.isEmpty()) {
-                log("→ 读不到 MicroMsg，检查微信是否已登录过、以及 root 是否真的生效")
-            } else {
-                log("样例: ${ls.take(6).joinToString(", ")}")
-            }
-            log(
-                if (xml == null) {
-                    "hook 尚未写入密码 → 去 LSPosed 启用模块并勾选微信作用域，然后冷启动微信"
-                } else {
-                    "hook 已写入密码（${xml.length} 字节）"
-                }
-            )
+            val diag = withContext(Dispatchers.IO) { RootShell.diagnose() }
+            log(diag)
         }
     }
 
