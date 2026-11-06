@@ -244,6 +244,11 @@ class MainActivity : Activity() {
             "下载并安装" to { doDownloadUpdate() }
         ))
 
+        root.addView(actionRow(
+            "抓 Xposed 日志" to { doGrabXposedLog() },
+            "查看微信目录" to { doListWxDir() }
+        ))
+
         root.addView(sectionTitle("运行日志"))
         logView = TextView(this).apply {
             textSize = 11f
@@ -638,6 +643,48 @@ class MainActivity : Activity() {
             }
             log("已下载 ${file.length() / 1024 / 1024} MB")
             log(UpdateChecker.install(this@MainActivity, file))
+        }
+    }
+
+    /**
+     * 直接抓 logcat 里我们自己的日志。
+     *
+     * 模块到底有没有被加载、hook 挂上没有、密码抓到没有，全在这一条流里，
+     * 比让用户去 LSPosed 里翻日志快得多。root 下 logcat 能读全量。
+     */
+    private fun doGrabXposedLog() {
+        launchStep("抓 Xposed 日志") {
+            val r = withContext(Dispatchers.IO) {
+                RootShell.exec(
+                    "logcat -d -t 2000 2>/dev/null | grep -iE 'WxBridge|LSPosed|XposedBridge' | tail -120",
+                    25
+                )
+            }
+            if (r.out.isBlank()) {
+                log("没抓到任何相关日志。可能是：")
+                log("  · 模块没被 LSPosed 加载（检查「启用」和「作用域」）")
+                log("  · 微信进程在模块安装前就启动了（要强制停止再开）")
+                log("  · logcat 缓冲区已被刷掉（重新打开微信后立刻抓）")
+                if (r.err.isNotBlank()) log("stderr: ${r.err.take(200)}")
+            } else {
+                log(r.out.trim())
+            }
+        }
+    }
+
+    /** 看微信目录里到底有没有生成文件，直接判断 hook 写没写 */
+    private fun doListWxDir() {
+        launchStep("查看微信目录") {
+            val r = withContext(Dispatchers.IO) {
+                RootShell.exec(
+                    "echo '--- shared_prefs ---'; " +
+                        "ls -l /data/data/com.tencent.mm/shared_prefs/ 2>&1 | grep -i wxbridge; " +
+                        "echo '--- files/wxbridge ---'; " +
+                        "ls -l /data/data/com.tencent.mm/files/wxbridge/ 2>&1",
+                    15
+                )
+            }
+            log(r.out.trim().ifBlank { "两个位置都没有 wxbridge 相关文件" })
         }
     }
 

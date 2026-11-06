@@ -29,9 +29,14 @@ internal object WcdbKeyHook {
     /** (类名, 方法名, 是否要求返回值非空) */
     private val targets = listOf(
         Triple("com.tencent.wcdb.database.SQLiteDatabase", "openDatabase", true),
-        // 底层连接，兜底：少数路径绕过 openDatabase 直接建连接
+        // 微信打开已存在的库时可能走这个重载，漏了它会导致一次都抓不到
+        Triple("com.tencent.wcdb.database.SQLiteDatabase", "openOrCreateDatabase", true),
+        // 底层连接，兜底：少数路径绕过上面两个直接建连接
         Triple("com.tencent.wcdb.database.SQLiteConnection", "open", false)
     )
+
+    /** 参数类型只在头几次打印，避免刷屏 */
+    private var debugLeft = 6
 
     fun install(cl: ClassLoader) {
         var hooked = 0
@@ -66,7 +71,18 @@ internal object WcdbKeyHook {
                     is String -> if (looksLikeDbPath(a)) path = a
                     // 密码是 byte[]，长度很短；用它排除掉其他 byte[] 参数（如 BLOB）
                     is ByteArray -> if (a.isNotEmpty() && a.size <= 64) pwd = a
+                    // 万一某个版本把密码换成 char[]，也接住
+                    is CharArray -> if (a.isNotEmpty() && a.size <= 64) {
+                        pwd = String(a).toByteArray(Charsets.UTF_8)
+                    }
                 }
+            }
+
+            // 诊断：有路径但没密码，说明这个重载的密码不在 byte[]/char[] 里，
+            // 把参数类型打出来，下次照着改就行
+            if (path != null && pwd == null && debugLeft > 0) {
+                debugLeft--
+                xlog("args without pwd: ${args.joinToString { it?.javaClass?.simpleName ?: "null" }}")
             }
 
             val p = path ?: return
