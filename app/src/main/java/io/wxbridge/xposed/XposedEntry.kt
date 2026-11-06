@@ -40,6 +40,8 @@ class XposedEntry : IXposedHookLoadPackage {
                 WcdbKeyHook.install(cl)
                 // 自动回复引擎也跑在微信进程：能直接用内存里的库实例和发送 API
                 AutoReplyEngine.start(cl)
+                // 发送入口是混淆的，先探测出候选，别靠猜类名
+                SendProbe.install(cl)
             }
         }
     }
