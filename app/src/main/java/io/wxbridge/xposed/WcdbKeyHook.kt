@@ -5,17 +5,21 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 
 /**
- * 从 WCDB 的 openDatabase 里截获 (path, password)。
+ * 从 WCDB 的开库路径里截获 (path, password)。
  *
- * WCDB 是腾讯开源的独立 library（com.tencent.wcdb 包），
- * 不参与微信主包的混淆规则，所以类名和签名在 8.x 各版本里基本稳定。
- * 这是整个方案里最脆弱、也最值得单独隔离的一个点。
+ * 微信 8.0.79 实测踩到的坑：只在 `lpparam.classLoader` 上 hook 是不够的。
+ * 微信启用了 Tinker 热修复，实际运行的类由 `DelegateLastClassLoader` 从
+ * `/data/user/0/com.tencent.mm/tinker/patch-xxx/dex/` 加载 —— 同一个类名在
+ * 两个 ClassLoader 里是两个不同的 Class 对象，hook 了主 ClassLoader 那份，
+ * 真实调用走的是另一份，所以一次都不触发。
+ *
+ * 解法：挂 `ClassLoader.loadClass`，等目标类真正被加载时再 hook。
  */
 internal object WcdbKeyHook {
 
     /**
      * 主库实例（com.tencent.wcdb.database.SQLiteDatabase）。
-     * 自动回复在微信进程内直接查它 —— 同一进程、已是解密状态，不用密码也不用复制。
+     * 自动回复在微信进程内直接查它 —— 同一进程、已是解密状态。
      */
     @Volatile
     var mainDb: Any? = null
@@ -26,46 +30,64 @@ internal object WcdbKeyHook {
     var mainDbPath: String? = null
         private set
 
-    /** (类名, 方法名, 是否要求返回值非空) */
-    private val targets = listOf(
-        Triple("com.tencent.wcdb.database.SQLiteDatabase", "openDatabase", true),
-        // 微信打开已存在的库时可能走这个重载，漏了它会导致一次都抓不到
-        Triple("com.tencent.wcdb.database.SQLiteDatabase", "openOrCreateDatabase", true),
-        // 再往上追一层：配置对象在开库前一定会构造，构造函数里就带着 path 和 password
-        Triple("com.tencent.wcdb.database.SQLiteDatabaseConfiguration", "<init>", false),
-        // 实例方法，某些路径绕过静态入口
-        Triple("com.tencent.wcdb.database.SQLiteDatabase", "open", false),
-        // 底层连接，兜底
-        Triple("com.tencent.wcdb.database.SQLiteConnection", "open", false)
+    /** 类名 → 需要 hook 的方法名 */
+    private val TARGETS: Map<String, List<String>> = mapOf(
+        "com.tencent.wcdb.database.SQLiteDatabase" to
+            listOf("openDatabase", "openOrCreateDatabase", "open"),
+        "com.tencent.wcdb.database.SQLiteDatabaseConfiguration" to
+            listOf("<init>"),
+        "com.tencent.wcdb.database.SQLiteConnection" to
+            listOf("open")
     )
 
-    /** 参数类型只在头几次打印，避免刷屏 */
+    /** 已经 hook 过的 (类名 + ClassLoader 身份)，避免重复挂 */
+    private val hooked = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /** 参数类型诊断只打前几次，避免刷屏 */
     private var debugLeft = 6
 
     fun install(cl: ClassLoader) {
-        var hooked = 0
-        for ((cls, method, needResult) in targets) {
-            val c = runCatching { XposedHelpers.findClass(cls, cl) }.getOrNull()
-            if (c == null) {
-                xlog("class not found: $cls (skip)")
-                continue
-            }
-            runCatching {
-                XposedBridge.hookAllMethods(c, method, makeCallback(needResult))
-                hooked++
-                xlog("hooked $cls#$method")
-            }.onFailure { xlog("hook $cls#$method failed: $it") }
+        // 1. 拦截类加载，覆盖 Tinker 的 DelegateLastClassLoader
+        runCatching {
+            XposedBridge.hookAllMethods(ClassLoader::class.java, "loadClass", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val c = param.result as? Class<*> ?: return
+                    if (TARGETS.containsKey(c.name)) hookClass(c)
+                }
+            })
+        }.onFailure { xlog("hook ClassLoader.loadClass failed: $it") }
+
+        // 2. 主 ClassLoader 里已经加载过的，立刻 hook 上
+        for (name in TARGETS.keys) {
+            runCatching { XposedHelpers.findClass(name, cl) }
+                .getOrNull()
+                ?.let { hookClass(it) }
         }
-        if (hooked == 0) {
-            xlog("WARNING: no WCDB hook installed — 微信可能改了库结构或本模块未启用")
+
+        if (hooked.isEmpty()) {
+            xlog("WARNING: WCDB hook 一个都没装上 —— 微信可能换了数据库实现")
         }
     }
 
-    private fun makeCallback(needResult: Boolean) = object : XC_MethodHook() {
-        override fun afterHookedMethod(param: MethodHookParam) {
-            // openDatabase 成功才写；失败时 result 为 null
-            if (needResult && param.result == null) return
+    private fun hookClass(c: Class<*>) {
+        val key = "${c.name}@${System.identityHashCode(c.classLoader)}"
+        if (!hooked.add(key)) return
 
+        val methods = TARGETS[c.name] ?: return
+        var ok = 0
+        for (m in methods) {
+            runCatching {
+                XposedBridge.hookAllMethods(c, m, callback)
+                ok++
+            }.onFailure { xlog("hook ${c.name}#$m failed: $it") }
+        }
+        if (ok > 0) {
+            xlog("hooked ${c.name} ×$ok  (loader=${c.classLoader?.javaClass?.simpleName})")
+        }
+    }
+
+    private val callback = object : XC_MethodHook() {
+        override fun afterHookedMethod(param: MethodHookParam) {
             val args = param.args ?: return
             var path: String? = null
             var pwd: ByteArray? = null
@@ -82,7 +104,7 @@ internal object WcdbKeyHook {
                 }
             }
 
-            // 诊断：有路径但没密码，说明这个重载的密码不在 byte[]/char[] 里，
+            // 诊断：有路径但没密码，说明密码不在 byte[]/char[] 里，
             // 把参数类型打出来，下次照着改就行
             if (path != null && pwd == null && debugLeft > 0) {
                 debugLeft--
@@ -92,7 +114,7 @@ internal object WcdbKeyHook {
             val p = path ?: return
 
             // 主库实例留给自动回复用
-            if (needResult && p.endsWith("EnMicroMsg.db")) {
+            if (p.endsWith("EnMicroMsg.db")) {
                 param.result?.let {
                     mainDb = it
                     mainDbPath = p
