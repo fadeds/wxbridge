@@ -52,7 +52,7 @@ internal object NewMessageHook {
                 ) {
                     sendStackLeft--
                     xlog("=== 发送消息调用栈（手动发一条即可复现）===")
-                    Thread.currentThread().stackTrace.take(28).forEach { xlog("    at $it") }
+                    Thread.currentThread().stackTrace.take(60).forEach { xlog("    at $it") }
                 }
 
                 if (hits < 5) {
