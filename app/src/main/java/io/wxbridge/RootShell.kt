@@ -59,11 +59,11 @@ object RootShell {
      * 然后 root 的 cp -f 覆盖内容时会保留 owner —— 否则 root 新建的文件
      * app 进程 stat 得到的是 -rw-------，读不了。chmod 是第二重保险。
      */
-    fun copyToAppData(src: String, dst: File): Boolean {
+    fun copyToAppData(src: String, dst: File, timeoutSec: Long = 30): Boolean {
         dst.parentFile?.let { if (!it.exists()) it.mkdirs() }
         if (!dst.exists()) runCatching { dst.createNewFile() }
         val q = dst.absolutePath
-        exec("cp -f '$src' '$q' 2>&1; chmod 666 '$q' 2>&1")
+        exec("cp -f '$src' '$q' 2>&1; chmod 666 '$q' 2>&1", timeoutSec)
         return dst.exists() && dst.length() > 0
     }
 
@@ -110,5 +110,26 @@ object RootShell {
     fun readText(path: String, timeoutSec: Long = 10): String? {
         val r = exec("cat '$path' 2>/dev/null", timeoutSec)
         return if (r.out.isBlank()) null else r.out
+    }
+
+    /**
+     * 列出目录下所有 .db 及其大小，按大小降序。
+     *
+     * 用 `stat -c` 而不是 `ls -l`：Android 不同 ROM 的 ls 输出列数不一致
+     * （有的带 SELinux context），解析容易错位。
+     */
+    fun listDbFiles(dir: String): List<Pair<String, Long>> {
+        val r = exec("stat -c '%s %n' '$dir'/*.db 2>/dev/null", 15)
+        if (r.out.isBlank()) return emptyList()
+        return r.out.lineSequence()
+            .mapNotNull { line ->
+                val sp = line.indexOf(' ')
+                if (sp <= 0) return@mapNotNull null
+                val size = line.substring(0, sp).trim().toLongOrNull() ?: return@mapNotNull null
+                val name = line.substring(sp + 1).trim().substringAfterLast('/')
+                if (name.isEmpty()) null else name to size
+            }
+            .sortedByDescending { it.second }
+            .toList()
     }
 }

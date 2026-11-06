@@ -43,7 +43,17 @@ object WxKeyReader {
         data class Fail(val reason: String) : Result()
     }
 
-    fun read(): Result {
+    /**
+     * @param workDir   如果模块没能定位主库，就用它做解密副本目录、本地探测一遍。
+     *                  传 null 表示不探测，只在模块已定位成功时返回。
+     * @param cacheFile App 侧缓存「上次探测到的主库」，避免每次读密钥都重扫一遍库目录
+     * @param onLog     探测过程的进度输出
+     */
+    fun read(
+        workDir: java.io.File? = null,
+        cacheFile: java.io.File? = null,
+        onLog: (String) -> Unit = {}
+    ): Result {
         if (!RootShell.hasRoot()) {
             return Result.Fail("没有 root 权限")
         }
@@ -62,27 +72,75 @@ object WxKeyReader {
                     "→ 冷启动微信后，先在微信里点开任意一个聊天，再回来读"
             )
 
-        val keys = parseKeys(keysJson)
+        val keys = parseKeys(keysJson).toMutableMap()
         if (keys.isEmpty()) {
             return Result.Fail("db_keys 为空，模块可能没抓到密码")
         }
 
         // 模块会探测出哪个库含 message 表并记下来，优先用这个
         val mainPath = map["main_db"]
-        val main: Pair<String, ByteArray>? = when {
+        var main: Pair<String, ByteArray>? = when {
             mainPath != null && keys.containsKey(mainPath) -> mainPath to keys.getValue(mainPath)
             else -> keys.entries
                 .firstOrNull { it.key.endsWith("EnMicroMsg.db") }
                 ?.let { it.key to it.value }
         }
+
+        // 上次 App 侧探测出来的主库。库路径必须以当前 MicroMsg/<md5>/ 开头，
+        // 换号或重登之后旧缓存会失效，不能blindly信任
+        if (main == null && cacheFile != null) {
+            val dbDir = keys.keys.firstOrNull()?.substringBeforeLast('/')
+            val c = readCache(cacheFile)
+            if (c != null && dbDir != null && c.first.substringBeforeLast('/') == dbDir) {
+                keys[c.first] = c.second
+                main = c.first to c.second
+                onLog("用上次的定位结果：${c.first.substringAfterLast('/')}")
+            }
+        }
+
+        // 模块没定位到（主库懒加载、微信没开过它）时，
+        // App 侧自己枚举库目录、用已抓到的 key 逐个试解，看谁有 message 表
+        if (main == null && workDir != null) {
+            val dbDir = keys.keys.firstOrNull()?.substringBeforeLast('/')
+            if (dbDir != null) {
+                val hit = io.wxbridge.db.MainDbFinder.find(dbDir, keys, workDir, onLog = onLog)
+                if (hit != null) {
+                    // 主库的 key 可能是猜出来的公共 key，必须补进 map，
+                    // 否则后面按库路径取密码又会取不到
+                    keys[hit.path] = hit.key
+                    main = hit.path to hit.key
+                }
+            }
+        }
+
         val mainKey = main ?: return Result.Fail(
-            "已抓到 ${keys.size} 个库的密码，但还没定位到消息主库。\n" +
-                "→ 在微信里点开任意一个聊天（主库懒加载），然后再回来\n" +
+            "已抓到 ${keys.size} 个库的密码，但没找到含 message 表的库。\n" +
+                "→ 在微信里点开任意一个聊天（主库懒加载）后重试\n" +
                 "→ 已抓到：${keys.keys.joinToString { it.substringAfterLast('/') }.take(150)}"
         )
 
+        // 探测出来的结果存一份，下次不用重扫（一次扫描要复制并解密多个库）
+        if (cacheFile != null) {
+            runCatching {
+                cacheFile.writeText(mainKey.first + "\n" + mainKey.second.toHexString())
+            }
+        }
+
         return Result.Ok(WxKey(mainKey.first, mainKey.second, keys))
     }
+
+    /** 读 App 侧缓存的主库定位结果（第一行路径、第二行 key 的 hex） */
+    private fun readCache(f: java.io.File): Pair<String, ByteArray>? = runCatching {
+        if (!f.exists()) return null
+        val lines = f.readLines()
+        if (lines.size < 2) return null
+        val path = lines[0].trim()
+        val key = hexToBytes(lines[1].trim()) ?: return null
+        if (path.isEmpty()) null else path to key
+    }.getOrNull()
+
+    private fun ByteArray.toHexString(): String =
+        joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
     private fun parseKeys(json: String): Map<String, ByteArray> = runCatching {
         val o = JSONObject(json)

@@ -137,11 +137,11 @@ class WxDatabase(
         File(workDir, "$name-shm").delete()
         File(workDir, "$name-wal").delete()
 
-        if (!RootShell.copyToAppData(src, dst)) return null
+        if (!RootShell.copyToAppData(src, dst, 180)) return null
 
         // WAL 里可能还有没落盘的最新消息，必须一起拿走，否则可能少最后几条
         val wal = File(workDir, "$name-wal")
-        if (!RootShell.copyToAppData("$src-wal", wal)) {
+        if (!RootShell.copyToAppData("$src-wal", wal, 60)) {
             wal.delete()
         }
         return dst

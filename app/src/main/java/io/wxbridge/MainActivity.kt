@@ -311,19 +311,22 @@ class MainActivity : Activity() {
 
     private fun doCheckEnv() {
         launchStep("环境自检") {
-            log("root: ${if (RootShell.hasRoot()) "OK" else "不可用"}")
-            if (!RootShell.hasRoot()) {
+            val hasRoot = withContext(Dispatchers.IO) { RootShell.hasRoot() }
+            log("root: ${if (hasRoot) "OK" else "不可用"}")
+            if (!hasRoot) {
                 log("→ 没有 root，后面三步都走不通。先确认 Magisk/KernelSU 授权了本 App。")
                 return@launchStep
             }
-            val ls = RootShell.listDir(WxPaths.MICRO_MSG)
+            val (ls, xml) = withContext(Dispatchers.IO) {
+                RootShell.listDir(WxPaths.MICRO_MSG) to
+                    RootShell.readText("/data/data/com.tencent.mm/shared_prefs/wxbridge.xml")
+            }
             log("${WxPaths.MICRO_MSG} 下有 ${ls.size} 项")
             if (ls.isEmpty()) {
                 log("→ 读不到 MicroMsg，检查微信是否已登录过、以及 root 是否真的生效")
             } else {
                 log("样例: ${ls.take(6).joinToString(", ")}")
             }
-            val xml = RootShell.readText("/data/data/com.tencent.mm/shared_prefs/wxbridge.xml")
             log(
                 if (xml == null) {
                     "hook 尚未写入密码 → 去 LSPosed 启用模块并勾选微信作用域，然后冷启动微信"
@@ -336,7 +339,15 @@ class MainActivity : Activity() {
 
     private fun doReadKey() {
         launchStep("读取密钥") {
-            when (val r = WxKeyReader.read()) {
+            // RootShell 是阻塞的 su 调用，绝不能跑在主线程上
+            val r = withContext(Dispatchers.IO) {
+                WxKeyReader.read(
+                    workDir = WxPaths.workDir(filesDir),
+                    cacheFile = File(filesDir, "main_db.txt"),
+                    onLog = { msg -> log(msg) }
+                )
+            }
+            when (r) {
                 is WxKeyReader.Result.Ok -> {
                     wxKey = r.key
                     wxDb = WxDatabase(filesDir, r.key)
@@ -440,7 +451,7 @@ class MainActivity : Activity() {
             log("先点②读取密钥，这一步要用密码解密各个库")
             return
         }
-        launchStep("探测 OCR 索引") {
+        launchStep("库结构扫描") {
             val scans = withContext(Dispatchers.IO) { db.scanAllDbs() }
             var hit = false
             for (s in scans) {

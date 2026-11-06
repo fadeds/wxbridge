@@ -9,7 +9,13 @@ object WxPaths {
     const val WX_DATA = "/data/data/com.tencent.mm"
     const val MICRO_MSG = "$WX_DATA/MicroMsg"
 
-    /** 主库文件名（8.x 各版本都是它） */
+    /**
+     * 旧版（8.0.7x 及更早）的主库文件名。
+     *
+     * 8.0.79 实测已经没有这个文件，主库改由 hook 在运行时探测
+     * （见 WcdbKeyHook.hasMessageTable）。这里保留仅供兼容判断，
+     * 不要再用它去拼路径。
+     */
     const val MAIN_DB = "EnMicroMsg.db"
 
     /** App 侧工作目录，用来放脱密后的库副本 */

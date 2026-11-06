@@ -254,11 +254,32 @@ App 底部「更新」一栏可以直接检查新版本：
 `rcontact`、`ImgInfo2` 可能各在独立的库里。图片定位和联系人名解析都依赖这个判断，
 先跑一次看清楚，调试会省很多时间。
 
+### 主库是运行时探测出来的
+
+**8.0.79 实测根本没有 `EnMicroMsg.db`。** 所以主库不能按文件名找，判定标准改成一条：
+哪个库里含 `message` 表，哪个就是主库。
+
+两条路径，互为兜底：
+
+1. hook 在开库时顺手查一下 `sqlite_master`，命中就记进 `main_db`
+2. 模块没记到时，App 侧自己把已抓到密码的库逐个解密检查（`MainDbFinder`），
+   跳过 `WxCgiReport` / `AppBrandDB` / `FTS5Index` 这类明确无关的库，最多试 8 个
+
+第二条不依赖 hook 的时机，所以即使微信换了开库路径也能work。
+
 ---
 
 ## 已知限制
 
 **微信版本兼容性。** hook 打的是 `com.tencent.wcdb.*`，腾讯开源的独立库，不参与微信主包混淆，8.x 各版本基本稳定。日志里出现 `WARNING: no WCDB hook installed` 就是没挂上。
+
+**这个坑踩了一整天，值得单独说：微信启用了 Tinker 热修复。**
+实际运行的类由 `DelegateLastClassLoader` 从 `/data/user/0/com.tencent.mm/tinker/patch-xxx/dex/`
+加载，和主 ClassLoader 里的同名类是**两个不同的 Class 对象**。
+在 `lpparam.classLoader` 上 hook 等于挂了一份没人用的副本 ——
+日志显示 "hooked"，但调用一次都不触发。
+现在改成挂 `ClassLoader.loadClass`，等目标类真正加载时再 hook，
+按「类名 + ClassLoader 身份」去重。改了这一点之后密码立刻就抓到了。
 
 **SQLCipher 参数不确定。** WCDB 早期用 SQLCipher 3 参数（1024 / 64000 / SHA1），8.0.4x 之后部分版本迁到 SQLCipher 4（4096 / 256000 / SHA512）。`DbOpener` 依次试三组，报错会列出试过的组合。
 
