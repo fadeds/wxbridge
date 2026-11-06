@@ -70,7 +70,7 @@ object MainDbFinder {
             }
 
             // 这个库自己有 key 就先用它，再退到公共候选
-            val tryKeys = buildList {
+            val tryKeys = buildList<ByteArray> {
                 keys[path]?.let { k -> add(k) }
                 commonKeys.forEach { k -> if (none { it.contentEquals(k) }) add(k) }
             }.take(MAX_KEYS)
