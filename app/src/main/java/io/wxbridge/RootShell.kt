@@ -160,8 +160,14 @@ object RootShell {
             if (uid <= 0) continue
             val userId = (uid / 100000).toInt()
             procs += pid to userId
-            // 借这个进程的 namespace —— 分身的数据只在它自己的 namespace 里
-            out += "/proc/$pid/root/data/user/$userId/${WxPaths.WX_PKG}"
+
+            // 关键：/data/user/0 是「绝对」符号链接 -> /data/data，
+            // 而绝对符号链接会跳回**调用方**的 namespace 重新解析，
+            // 于是 /proc/<pid>/root/data/user/0/... 这条捷径会失效（实测 ENOENT）。
+            // 直接走 target root 下的 /data/data 就没有符号链接，稳定。
+            out += "/proc/$pid/root/data/data/${WxPaths.WX_PKG}"
+            // user != 0 时 /data/user/<id> 是真实目录，这条路也成立
+            if (userId != 0) out += "/proc/$pid/root/data/user/$userId/${WxPaths.WX_PKG}"
         }
         for ((_, u) in procs) out += "/data/user/$u/${WxPaths.WX_PKG}"
         exec("ls -1 /data/user 2>/dev/null", 8).out.lineSequence()
@@ -260,14 +266,12 @@ object RootShell {
         val walk = probe.procs.joinToString("\n") { (pid, u) ->
             """
             echo '--- pid $pid (user $u) ---'
-            ls -ld /proc/$pid 2>&1
             ls -ld /proc/$pid/root 2>&1
             readlink /proc/$pid/root 2>&1
-            ls -ld /proc/$pid/root/data 2>&1
-            ls -ld /proc/$pid/root/data/user 2>&1
+            ls -ld /proc/$pid/root/data/data 2>&1
+            ls -1  /proc/$pid/root/data/data/com.tencent.mm 2>&1 | head -6
+            ls -l  /proc/$pid/root/data/data/com.tencent.mm/files/wxbridge/keys.json 2>&1
             ls -ld /proc/$pid/root/data/user/$u 2>&1
-            ls -1  /proc/$pid/root/data/user/$u/com.tencent.mm 2>&1 | head -6
-            ls -l  /proc/$pid/root/data/user/$u/com.tencent.mm/files/wxbridge/keys.json 2>&1
             """.trimIndent()
         }
         val cmd = """

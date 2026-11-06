@@ -105,7 +105,19 @@ internal object DataBridge {
         if (d != null) {
             o.put("dbClass", d.javaClass.name)
             runCatching {
-                o.put("tables", queryRows(d, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"))
+                val all = queryRows(d, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                val names = (0 until all.length()).map { all.getJSONObject(it).optString("name") }
+                o.put("tableCount", names.size)
+                // 只回与消息/联系人/图片相关的，别把几百张表全塞进广播
+                o.put(
+                    "tables",
+                    JSONArray(
+                        names.filter {
+                            it.contains("message", true) || it.contains("contact", true) ||
+                                it.contains("img", true) || it.contains("emoji", true)
+                        }
+                    )
+                )
             }.onFailure { o.put("tablesError", it.message ?: it.javaClass.simpleName) }
         }
         return o.toString()
@@ -130,8 +142,14 @@ internal object DataBridge {
             while (c.moveToNext()) {
                 val row = JSONObject()
                 for (i in cols.indices) {
-                    // 统一转字符串：BLOB 用 getString 会抛，所以先判类型
-                    row.put(cols[i], if (c.isNull(i)) "" else c.getString(i))
+                    // 不能一律 getString：message 表里有 BLOB 字段（如 lvbuffer），
+                    // 直接 getString 会抛 "Unable to convert BLOB to string"
+                    when (c.getType(i)) {
+                        Cursor.FIELD_TYPE_NULL -> row.put(cols[i], JSONObject.NULL)
+                        Cursor.FIELD_TYPE_BLOB ->
+                            row.put(cols[i], "<blob:${c.getBlob(i)?.size ?: 0}>")
+                        else -> row.put(cols[i], c.getString(i) ?: "")
+                    }
                 }
                 arr.put(row)
             }
