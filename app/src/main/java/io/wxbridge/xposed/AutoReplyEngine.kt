@@ -129,11 +129,12 @@ internal object AutoReplyEngine {
         if (seen.containsKey(key)) return false
         seen[key] = Unit
         if (seen.size > 400) {
-            val it = seen.keys.iterator()
+            // 不能叫 it —— repeat 的 lambda 有隐式 it，会把它遮蔽掉
+            val iter = seen.keys.iterator()
             repeat(120) {
-                if (it.hasNext()) {
-                    it.next()
-                    it.remove()
+                if (iter.hasNext()) {
+                    iter.next()
+                    iter.remove()
                 }
             }
         }

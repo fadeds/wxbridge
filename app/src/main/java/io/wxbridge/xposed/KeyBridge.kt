@@ -1,7 +1,7 @@
 package io.wxbridge.xposed
 
+import android.app.AndroidAppHelper
 import android.content.Context
-import de.robv.android.xposed.AndroidAppHelper
 
 /**
  * 把 hook 到的密码交给主 App。

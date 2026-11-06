@@ -2,6 +2,7 @@ package io.wxbridge.xposed
 
 import de.robv.android.xposed.XposedHelpers
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 
 /**
  * 微信的消息发送入口。文本和表情分两条，都靠「多候选 + 签名匹配」定位。
@@ -44,8 +45,10 @@ internal object WxSender {
     fun init(cl: ClassLoader): String {
         for (name in CANDIDATES) {
             val c = runCatching { XposedHelpers.findClass(name, cl) }.getOrNull() ?: continue
-            val m = c.declaredMethods.firstOrNull { it.isStatic && looksLikeTextSend(it) }
-                ?: continue
+            // Method 没有 isStatic 属性，得看 modifiers
+            val m = c.declaredMethods.firstOrNull {
+                Modifier.isStatic(it.modifiers) && looksLikeTextSend(it)
+            } ?: continue
             runCatching { m.isAccessible = true }
             textMethod = m
             textDesc = "${c.name}#${m.name}(${m.parameterTypes.joinToString { it.simpleName }})"
@@ -65,7 +68,7 @@ internal object WxSender {
         for (name in CANDIDATES) {
             val c = runCatching { XposedHelpers.findClass(name, cl) }.getOrNull() ?: continue
             val m = c.declaredMethods.firstOrNull {
-                it.isStatic && it.parameterCount in 2..4 &&
+                Modifier.isStatic(it.modifiers) && it.parameterCount in 2..4 &&
                     it.parameterTypes[0] == String::class.java &&
                     it.parameterTypes[1].name == emojiCls.name
             } ?: continue
