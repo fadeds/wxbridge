@@ -73,10 +73,15 @@ class WxDatabase(
 
     fun repo(): MainRepo? = main?.let { MainRepo(it) }
 
-    /** 打开附属库（rcontact.db / imageinfo2.db 等），跟主库同一个密码 */
+    /**
+     * 打开附属库（rcontact.db / imageinfo2.db 等）。
+     * 微信 8.0.79 每个库的密码不同，必须按库名取对应密码，不能拿主库的凑。
+     */
     fun openExtra(name: String): SQLiteDatabase? {
+        val src = "${key.dbDir}/$name"
         val local = copyWithWal(key.dbDir, name) ?: return null
-        return runCatching { DbOpener.open(local, key.password).first }.getOrNull()
+        val pwd = key.passwordFor(src)
+        return runCatching { DbOpener.open(local, pwd).first }.getOrNull()
     }
 
     /** 单个库的扫描结果 */
@@ -108,7 +113,7 @@ class WxDatabase(
                 continue
             }
             try {
-                val (db, _) = DbOpener.open(local, key.password)
+                val (db, _) = DbOpener.open(local, key.passwordFor("${key.dbDir}/$name"))
                 val tables = runCatching { MainRepo(db).tableNames() }.getOrDefault(emptyList())
                 runCatching { db.close() }
                 out += DbScan(name, true, tables.sorted(), null)

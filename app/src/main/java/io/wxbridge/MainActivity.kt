@@ -341,7 +341,8 @@ class MainActivity : Activity() {
                     wxKey = r.key
                     wxDb = WxDatabase(filesDir, r.key)
                     log("dbPath = ${r.key.dbPath}")
-                    log("pwd    = ${r.key.passwordUtf8.ifBlank { "(二进制)" }}  (${r.key.password.size} bytes)")
+                    log("主库   = ${r.key.dbName}  (${r.key.password.size} bytes)")
+                    log("已抓库 = ${r.key.keys.size} 个：${r.key.keys.keys.joinToString { it.substringAfterLast('/') }.take(120)}")
                     log("已就绪，接着点③")
                 }
                 is WxKeyReader.Result.Fail -> log(r.reason)
