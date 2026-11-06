@@ -1,8 +1,10 @@
 name: Build & Release
 
 on:
+  # 只在打 tag 时构建发版。之前 main 和 tag 都监听，导致每次发版
+  # 都会跑两个 run（先 push main 一次、再 push tag 一次），白白多构建 3~5 分钟。
+  # 需要验证编译又不想发版时，用 workflow_dispatch 手动跑。
   push:
-    branches: [ main, master ]
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
