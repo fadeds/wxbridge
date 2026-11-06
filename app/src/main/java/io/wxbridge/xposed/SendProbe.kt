@@ -54,28 +54,66 @@ internal object SendProbe {
      * 发送走的协程在存储层之前就切到了线程池，insert 的栈里看不到 UI。
      * 所以从另一头抓：hook 点击事件。
      *
-     * 不猜类名 —— 前 6 次点击全部记录（类名 + id + 精简栈），
-     * 这样即使发送按钮是自定义 View、名字里没有 Send，也能看到它。
+     * 不猜类名 —— 前 12 次点击记录类名 + id + 监听器类，
+     * 并从 View.mListenerInfo 里把 OnClickListener 挖出来立刻 hook，下一次点击就能看到真正的处理逻辑。
      */
-    private var clicksLeft = 6
+    private var clicksLeft = 12
+
+    /** 已经 hook 过的监听器类 */
+    private val hookedListeners = java.util.Collections.synchronizedSet(HashSet<String>())
 
     private fun hookSendClick() {
         runCatching {
-            val cb = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    if (clicksLeft <= 0) return
-                    val v = param.thisObject as? android.view.View ?: return
-                    clicksLeft--
-                    val cn = v.javaClass.name
-                    xlog("SendProbe 点击[$clicksLeft]: $cn id=${v.id} tag=${runCatching { v.tag }.getOrNull()}")
-                    Thread.currentThread().stackTrace.take(14).forEach { xlog("    at $it") }
+            XposedBridge.hookAllMethods(
+                android.view.View::class.java,
+                "performClick",
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (clicksLeft <= 0) return
+                        val v = param.thisObject as? android.view.View ?: return
+                        clicksLeft--
+
+                        // 点击的 OnClickListener 藏在 View.mListenerInfo.mOnClickListener，
+                        // 它不在调用栈上，只能反射读出来
+                        val listener = runCatching {
+                            val li = XposedHelpers.getObjectField(v, "mListenerInfo")
+                            XposedHelpers.getObjectField(li, "mOnClickListener")
+                        }.getOrNull()
+
+                        xlog(
+                            "SendProbe 点击[$clicksLeft]: ${v.javaClass.name} id=${v.id} " +
+                                "listener=${listener?.javaClass?.name ?: "null"}"
+                        )
+                        listener?.let { hookListener(it.javaClass) }
+                    }
                 }
-            }
-            XposedBridge.hookAllMethods(android.view.View::class.java, "performClick", cb)
-            XposedBridge.hookAllMethods(android.view.View::class.java, "callOnClick", cb)
-            xlog("SendProbe: 已 hook View.performClick / callOnClick")
+            )
+            xlog("SendProbe: 已 hook View.performClick")
         }.onFailure { xlog("SendProbe: hook 点击失败 $it") }
     }
+
+    /** 把点击监听器的 onClick 挂上，下一次点同一个按钮就能看到真正的处理逻辑 */
+    private fun hookListener(c: Class<*>) {
+        if (!hookedListeners.add(c.name)) return
+        runCatching {
+            var n = 0
+            for (m in c.declaredMethods) {
+                if (m.name != "onClick" || m.parameterCount != 1) continue
+                XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (listenerLogsLeft <= 0) return
+                        listenerLogsLeft--
+                        xlog("SendProbe onClick: ${c.name}#onClick")
+                        Thread.currentThread().stackTrace.take(26).forEach { xlog("    at $it") }
+                    }
+                })
+                n++
+            }
+            if (n > 0) xlog("SendProbe: 已 hook 监听器 $c ×$n")
+        }.onFailure { xlog("SendProbe: hook 监听器失败 $it") }
+    }
+
+    private var listenerLogsLeft = 4
 
     private fun hookClass(c: Class<*>) {
         val key = "${c.name}@${System.identityHashCode(c.classLoader)}"
