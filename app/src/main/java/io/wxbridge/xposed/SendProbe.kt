@@ -24,15 +24,16 @@ internal object SendProbe {
     /** 栈里出现过的层，由近及远 */
     private val SUSPECT = listOf(
         "ox0.j0",
-        "yh0.p",
-        "ii5.b0",
-        "com.tencent.mm.storage.f9"
+        "yh0.p"
     )
 
     private val hooked = java.util.Collections.synchronizedSet(HashSet<String>())
 
     /** 总共只打这么多条命中，避免刷屏拖慢微信 */
     private var logsLeft = 24
+
+    /** 点击栈只打一次，够用 */
+    private var clickLogged = false
 
     fun install(cl: ClassLoader) {
         // 覆盖 Tinker 的 DelegateLastClassLoader
@@ -48,6 +49,36 @@ internal object SendProbe {
         for (name in SUSPECT) {
             runCatching { XposedHelpers.findClass(name, cl) }.getOrNull()?.let { hookClass(it) }
         }
+
+        hookSendClick()
+    }
+
+    /**
+     * 发送走的协程在存储层之前就切到了线程池，insert 的栈里看不到 UI。
+     * 所以从另一头抓：hook 发送按钮的点击，UI 线程的栈会把整条发送链路露出来。
+     */
+    private fun hookSendClick() {
+        runCatching {
+            XposedBridge.hookAllMethods(
+                android.view.View::class.java,
+                "performClick",
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (clickLogged) return
+                        val v = param.thisObject as? android.view.View ?: return
+                        val cn = v.javaClass.name
+                        val looksLikeSend = cn.contains("Send", true) ||
+                            cn.contains("chatting", true) ||
+                            cn.contains("Chatting", true)
+                        if (!looksLikeSend) return
+                        clickLogged = true
+                        xlog("SendProbe 点击: $cn (id=${v.id})")
+                        Thread.currentThread().stackTrace.take(45).forEach { xlog("    at $it") }
+                    }
+                }
+            )
+            xlog("SendProbe: 已 hook View.performClick")
+        }.onFailure { xlog("SendProbe: hook performClick 失败 $it") }
     }
 
     private fun hookClass(c: Class<*>) {
