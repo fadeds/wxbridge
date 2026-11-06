@@ -48,7 +48,44 @@ internal object SendProbe {
         }
 
         hookSendClick()
+        hookSendButtonListener(cl)
     }
+
+    /**
+     * 从点击探测里确认的事实：
+     *   发送按钮 = android.widget.Button id=2131366064
+     *   监听器   = com.tencent.mm.pluginsdk.ui.chat.z1
+     *
+     * `pluginsdk` 这个包名没有被混淆（不是单字母），比 `ii5`/`ox0` 稳定得多。
+     * 直接挂它的 onClick，把 40 帧栈打出来，发送 API 一定在里面。
+     */
+    private fun hookSendButtonListener(cl: ClassLoader) {
+        hookOnClickByName("com.tencent.mm.pluginsdk.ui.chat.z1", cl, 40)
+        // 顺带把旁边那个按钮也挂上（+ / 表情），便于区分
+        hookOnClickByName("com.tencent.mm.pluginsdk.ui.chat.q2", cl, 16)
+    }
+
+    private fun hookOnClickByName(name: String, cl: ClassLoader, frames: Int) {
+        runCatching {
+            val c = XposedHelpers.findClass(name, cl)
+            var n = 0
+            for (m in c.declaredMethods) {
+                if (m.name != "onClick" || m.parameterCount != 1) continue
+                XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (onClickLogsLeft <= 0) return
+                        onClickLogsLeft--
+                        xlog("SendProbe SEND onClick: ${c.name}#onClick")
+                        Thread.currentThread().stackTrace.take(frames).forEach { xlog("    at $it") }
+                    }
+                })
+                n++
+            }
+            if (n > 0) xlog("SendProbe: 已 hook 发送监听器 $name ×$n")
+        }.onFailure { xlog("SendProbe: hook $name 失败 ${it.message}") }
+    }
+
+    private var onClickLogsLeft = 3
 
     /**
      * 发送走的协程在存储层之前就切到了线程池，insert 的栈里看不到 UI。
