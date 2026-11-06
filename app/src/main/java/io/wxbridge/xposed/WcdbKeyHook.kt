@@ -113,12 +113,14 @@ internal object WcdbKeyHook {
 
             val p = path ?: return
 
-            // 主库实例留给自动回复用
-            if (p.endsWith("EnMicroMsg.db")) {
-                param.result?.let {
-                    mainDb = it
-                    mainDbPath = p
-                }
+            // 用文件名猜主库不可靠 —— 微信 8.0.79 实测根本没有 EnMicroMsg.db。
+            // 直接在微信进程内查有没有 message 表，查到就是主库。
+            val dbObj = param.result
+            if (dbObj != null && mainDbPath == null && hasMessageTable(dbObj)) {
+                mainDb = dbObj
+                mainDbPath = p
+                runCatching { KeyBridge.onMainDb(p) }
+                xlog("主库确认: ${p.substringAfterLast('/')}")
             }
 
             val k = pwd ?: return
@@ -128,4 +130,26 @@ internal object WcdbKeyHook {
 
     private fun looksLikeDbPath(s: String): Boolean =
         s.endsWith(".db") && (s.startsWith("/") || s.contains("MicroMsg"))
+
+    /**
+     * 这个库是不是消息主库。
+     * 查 sqlite_master 比猜文件名可靠得多，一次查询几毫秒，可接受。
+     */
+    private fun hasMessageTable(db: Any): Boolean = runCatching {
+        val m = db.javaClass.methods.firstOrNull {
+            it.name == "rawQuery" && it.parameterTypes.size == 2 && it.parameterTypes[1].isArray
+        } ?: return false
+
+        val cur = m.invoke(
+            db,
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='message'",
+            arrayOf<String>()
+        ) as? android.database.Cursor ?: return false
+
+        try {
+            cur.moveToFirst() && cur.getInt(0) > 0
+        } finally {
+            runCatching { cur.close() }
+        }
+    }.getOrDefault(false)
 }

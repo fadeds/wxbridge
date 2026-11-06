@@ -21,6 +21,7 @@ internal object KeyBridge {
 
     private const val PREFS = "wxbridge"
     private const val KEY_KEYS = "db_keys"
+    private const val KEY_MAIN_DB = "main_db"
     private const val KEY_UPDATED_AT = "updated_at"
 
     @Volatile
@@ -31,6 +32,21 @@ internal object KeyBridge {
 
     fun attach(c: Context) {
         ctx = c.applicationContext ?: c
+    }
+
+    /**
+     * 记录哪个库是消息主库（含 message 表的那个）。
+     * 微信 8.0.79 没有 EnMicroMsg.db，只能靠实际探测，不能靠文件名猜。
+     */
+    fun onMainDb(dbPath: String) {
+        val app = ctx ?: AndroidAppHelper.currentApplication() ?: return
+        runCatching {
+            app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_MAIN_DB, dbPath)
+                .commit()
+            xlog("main db recorded: ${dbPath.substringAfterLast('/')}")
+        }
     }
 
     /**

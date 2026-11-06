@@ -67,13 +67,19 @@ object WxKeyReader {
             return Result.Fail("db_keys 为空，模块可能没抓到密码")
         }
 
-        val main = keys.entries.firstOrNull { it.key.endsWith("EnMicroMsg.db") }
-            ?: return Result.Fail(
-                "已抓到 ${keys.size} 个库的密码，但还没有主库 EnMicroMsg.db。\n" +
-                    "→ 在微信里点开任意一个聊天（主库是懒加载的），然后再回来"
-            )
+        // 模块会探测出哪个库含 message 表并记下来，优先用这个
+        val mainPath = map["main_db"]
+        val main = when {
+            mainPath != null && keys.containsKey(mainPath) -> mainPath to keys.getValue(mainPath)
+            // 兼容老数据
+            else -> keys.entries.firstOrNull { it.key.endsWith("EnMicroMsg.db") }
+        } ?: return Result.Fail(
+            "已抓到 ${keys.size} 个库的密码，但还没定位到消息主库。\n" +
+                "→ 在微信里点开任意一个聊天（主库懒加载），然后再回来\n" +
+                "→ 已抓到：${keys.keys.joinToString { it.substringAfterLast('/') }.take(150)}"
+        )
 
-        return Result.Ok(WxKey(main.key, main.value, keys))
+        return Result.Ok(WxKey(main.first, main.second, keys))
     }
 
     private fun parseKeys(json: String): Map<String, ByteArray> = runCatching {
