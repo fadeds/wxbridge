@@ -65,7 +65,7 @@ object WxKeyReader {
             return Result.Fail("没有 root 权限")
         }
 
-        val xml = readFirst(WxPaths.prefsFiles())
+        val xml = readFirst(WxPaths.prefsFiles().map { RootShell.wxPath(it) })
             ?: return Result.Fail(
                 "读不到密码文件，试过这些路径：\n" +
                     WxPaths.prefsFiles().joinToString("\n") { "  · $it" } + "\n" +
@@ -80,7 +80,11 @@ object WxKeyReader {
                     "→ 冷启动微信后，先在微信里点开任意一个聊天，再回来读"
             )
 
-        val keys = parseKeys(keysJson).toMutableMap()
+        // 库里记的路径是微信进程视角的 /data/user/0/...；su 在另一个 namespace，
+        // 这里统一映射成当前真正能访问的形态（可能带 /proc/<pid>/root 前缀）
+        val keys = parseKeys(keysJson)
+            .mapKeys { RootShell.wxPath(it.key) }
+            .toMutableMap()
         if (keys.isEmpty()) {
             return Result.Fail("db_keys 为空，模块可能没抓到密码")
         }

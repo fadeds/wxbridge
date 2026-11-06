@@ -132,7 +132,7 @@ object AutoReplyPaths {
     /** 老写法，模块读配置时兜底 */
     const val CFG_LEGACY = WxPaths.WX_DATA + "/files/wxbridge/cfg.json"
 
-    fun dirApp(): String = "${RootShell.wxData()}/files/wxbridge"
+    fun dirApp(): String = "${RootShell.wxRoot()}/files/wxbridge"
     fun cfgApp(): String = "${dirApp()}/cfg.json"
     fun logApp(): String = "${dirApp()}/reply.log"
 }
@@ -155,7 +155,7 @@ object AutoReplyStore {
      *
      * 还有一处必须注意：路径不能写死 /data/data/...，KernelSU 的 su 在全局
      * mount namespace 里看不到那个形态，`mkdir -p` 会凭空建出一个空的
-     * /data/data/com.tencent.mm 目录，微信永远读不到。所以用 RootShell.wxData() 探测。
+     * /data/data/com.tencent.mm 目录，微信永远读不到。所以用 RootShell.wxRoot() 探测。
      *
      * @return null 表示成功，非 null 是失败原因（直接展示给用户）
      */
@@ -165,7 +165,7 @@ object AutoReplyStore {
         val json = cfg.toJson()
         val dir = AutoReplyPaths.dirApp()
         val cfgFile = AutoReplyPaths.cfgApp()
-        val wxData = RootShell.wxData()
+        val wxData = RootShell.wxRoot()
         val wxUid = "chown \$(stat -c '%u:%g' '$wxData')"
 
         // 三件事必须一起做，少一件都会让微信进程读不到或写不了：

@@ -116,28 +116,59 @@ object RootShell {
         return Result(p.exitValue(), out.toString(), err.toString())
     }
 
+    /**
+     * 微信数据目录在 **su 所在 namespace 里** 真正可访问的根路径。
+     *
+     * Android 10+ 起，用户的 CE 存储（/data/user/0）是在「每用户 mount namespace」
+     * 里挂载的。KernelSU 的 su 跑在 init 的 namespace，那里 /data/user/0 是空的，
+     * 所以 `ls /data/data/com.tencent.mm` 报的是 **No such file**（不是权限拒绝）。
+     *
+     * 解法：借微信自己进程的 namespace —— `/proc/<pid>/root` 会解析到那个进程的根，
+     * 路径按它的挂载表走。不需要 nsenter，也不依赖 su 的实现。
+     *
+     * 返回值可能是：
+     *   /data/user/0/com.tencent.mm                      （直接可访问时）
+     *   /proc/12345/root/data/user/0/com.tencent.mm      （借 namespace 时）
+     */
+    @Volatile
+    private var wxRootCached: String? = null
+
+    fun wxRoot(refresh: Boolean = false): String {
+        if (!refresh) wxRootCached?.let { return it }
+
+        WxPaths.wxDataDirs().firstOrNull { exists(it) }?.let {
+            wxRootCached = it
+            return it
+        }
+
+        val pid = exec("pidof com.tencent.mm 2>/dev/null | tr ' ' '\\n' | head -1", 8)
+            .out.trim()
+        if (pid.isNotEmpty() && pid.all { c -> c.isDigit() }) {
+            WxPaths.wxDataDirs()
+                .map { "/proc/$pid/root$it" }
+                .firstOrNull { exists(it) }
+                ?.let {
+                    wxRootCached = it
+                    return it
+                }
+        }
+
+        wxRootCached = WxPaths.WX_DATA_USER
+        return WxPaths.WX_DATA_USER
+    }
+
+    /** 把任意写法的微信路径映射成当前 namespace 下真正能访问的路径 */
+    fun wxPath(path: String): String {
+        val marker = "/com.tencent.mm"
+        val i = path.indexOf(marker)
+        if (i < 0) return path
+        return wxRoot() + path.substring(i + marker.length)
+    }
+
     /** 路径是否存在（走 root，用于判断该用 /data/user/0 还是 /data/data 形态） */
     fun exists(path: String): Boolean {
         val r = exec("test -e '$path' && echo 1 || echo 0", 8)
         return r.out.trim().endsWith("1")
-    }
-
-    /**
-     * 微信数据目录的真实路径。
-     *
-     * KernelSU 的 su 处在全局 mount namespace，`/data/data/com.tencent.mm`
-     * 在那里报 No such file（不是权限问题），`/data/user/0/...` 才存在。
-     * 两种都可能，所以运行时探一次并缓存。
-     */
-    @Volatile
-    private var wxDataDir: String? = null
-
-    fun wxData(): String {
-        wxDataDir?.let { return it }
-        val hit = WxPaths.wxDataDirs().firstOrNull { exists(it) }
-            ?: WxPaths.WX_DATA_USER
-        wxDataDir = hit
-        return hit
     }
 
     /**
@@ -148,17 +179,23 @@ object RootShell {
      * 这段不做任何过滤，把 uid / SELinux 上下文 / 真实报错全打出来。
      */
     fun diagnose(): String {
+        val q = "${'$'}"
         val cmd = """
             echo '= uid ='; id 2>&1
             echo '= 当前 SELinux 上下文 ='; cat /proc/self/attr/current 2>&1
             echo '= getenforce ='; getenforce 2>&1
             echo '= su 位置 ='; command -v su 2>&1
             echo '= namespace ='; readlink /proc/self/ns/mnt 2>&1
-            echo '= /data/data 形式 ='; ls -ld /data/data/com.tencent.mm 2>&1
-            echo '= /data/user/0 形式 ='; ls -ld /data/user/0/com.tencent.mm 2>&1
-            echo '= MicroMsg ='; ls -1 /data/user/0/com.tencent.mm/MicroMsg 2>&1 | head -5
-            echo '= shared_prefs ='; ls -1 /data/user/0/com.tencent.mm/shared_prefs 2>&1 | head -6
-            echo '= 密码文件 ='; ls -l /data/user/0/com.tencent.mm/shared_prefs/wxbridge.xml 2>&1
+            echo '= 微信 pid ='; pidof com.tencent.mm 2>&1
+            echo '= 直接访问 /data/data ='; ls -ld /data/data/com.tencent.mm 2>&1
+            echo '= 直接访问 /data/user/0 ='; ls -ld /data/user/0/com.tencent.mm 2>&1
+            echo '= 选中的根路径 ='; echo '${wxRoot()}'
+            P=${q}(pidof com.tencent.mm 2>/dev/null | tr ' ' '\n' | head -1)
+            echo '= 借 namespace 访问 ='; ls -ld "/proc/${q}P/root/data/user/0/com.tencent.mm" 2>&1
+            echo '= 密码文件（借 namespace）='
+            ls -l "/proc/${q}P/root/data/user/0/com.tencent.mm/shared_prefs/wxbridge.xml" 2>&1
+            echo '= 当前可访问的密码文件 ='
+            ls -l '${wxPath(WxPaths.WX_DATA_USER + "/shared_prefs/wxbridge.xml")}' 2>&1
         """.trimIndent()
         val r = exec(cmd, 20)
         return (r.out + if (r.err.isNotBlank()) "\n[stderr] ${r.err}" else "").trim()
