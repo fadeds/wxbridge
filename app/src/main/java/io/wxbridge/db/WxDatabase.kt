@@ -42,13 +42,13 @@ class WxDatabase(
         if (dirFiles.isEmpty()) {
             return log.append("！读不到库目录，root 或路径有问题").toString()
         }
-        if (WxPaths.MAIN_DB !in dirFiles) {
-            log.append("！目录里没有 ${WxPaths.MAIN_DB}\n")
+        if (key.dbName !in dirFiles) {
+            log.append("！目录里没有 ${key.dbName}\n")
             log.append("  实际看到: ${dirFiles.take(20).joinToString(", ")}\n")
             return log.toString()
         }
 
-        val localMain = copyWithWal(key.dbDir, WxPaths.MAIN_DB)
+        val localMain = copyWithWal(key.dbDir, key.dbName)
             ?: return log.append("！复制主库失败").toString()
         log.append("主库副本: ${localMain.length() / 1024}KB\n")
 
@@ -102,7 +102,7 @@ class WxDatabase(
     fun scanAllDbs(limit: Int = 12): List<DbScan> {
         val names = RootShell.listDir(key.dbDir)
             .filter { it.endsWith(".db") }
-            .sortedBy { if (it == WxPaths.MAIN_DB) 0 else 1 }
+            .sortedBy { if (it == key.dbName) 0 else 1 }
             .take(limit)
 
         val out = ArrayList<DbScan>(names.size)
