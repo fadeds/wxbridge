@@ -4,6 +4,8 @@
     <!-- 只读聊天库 + 调云端 LLM，除网络外不需要任何运行时权限 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 应用内更新：下载到 cache 后拉起系统安装器 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- 同一 APK 承担两个角色：LSPosed 模块（仅注入微信进程）+ 本机数据管道 App -->
     <application
@@ -17,6 +19,17 @@
         <meta-data android:name="xposeddescription" android:value="@string/xposed_desc" />
         <meta-data android:name="xposedminversion" android:value="93" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
+
+        <!-- 应用内更新：把下载到 cache 的 APK 交给系统安装器 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".MainActivity"

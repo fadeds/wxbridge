@@ -54,6 +54,9 @@ class MainActivity : Activity() {
     private lateinit var cbAllowEmoji: CheckBox
     private lateinit var cbAutoSticker: CheckBox
     private lateinit var etStickerChance: EditText
+    private lateinit var etGhToken: EditText
+
+    private var pendingRelease: UpdateChecker.Release? = null
     private lateinit var etWhitelist: EditText
     private lateinit var etMyNick: EditText
     private lateinit var etCtxCount: EditText
@@ -209,6 +212,17 @@ class MainActivity : Activity() {
         root.addView(actionRow(
             "保存自动回复" to { saveAutoReply() },
             "回复日志" to { showAutoReplyLog() }
+        ))
+
+        root.addView(sectionTitle("更新"))
+        etGhToken = EditText(this).apply {
+            hint = "GitHub token（可选，私有仓库或触发限流时填）"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        root.addView(labeled("GitHub token", etGhToken))
+        root.addView(actionRow(
+            "检查更新" to { doCheckUpdate() },
+            "下载并安装" to { doDownloadUpdate() }
         ))
 
         logView = TextView(this).apply {
@@ -487,6 +501,62 @@ class MainActivity : Activity() {
             .apply()
     }
 
+    // ---------------- 更新 ----------------
+
+    private fun doCheckUpdate() {
+        launchStep("检查更新") {
+            val token = etGhToken.text.toString().trim()
+            cfg.edit().putString("gh_token", token).apply()
+
+            log("当前版本 ${BuildConfig.VERSION_NAME}")
+
+            when (val r = UpdateChecker.check(BuildConfig.VERSION_NAME, token)) {
+                is UpdateChecker.Result.Newer -> {
+                    pendingRelease = r.release
+                    log("发现新版本：${r.release.title}")
+                    if (r.release.sizeBytes > 0) {
+                        log("安装包 ${r.release.sizeBytes / 1024 / 1024} MB")
+                    }
+                    if (r.release.notes.isNotBlank()) {
+                        log("--- 更新说明 ---")
+                        log(r.release.notes)
+                    }
+                    log("点「下载并安装」继续")
+                }
+                is UpdateChecker.Result.UpToDate -> {
+                    pendingRelease = null
+                    log("已是最新（${r.current}）")
+                }
+                is UpdateChecker.Result.Fail -> log(r.reason)
+            }
+        }
+    }
+
+    private fun doDownloadUpdate() {
+        val rel = pendingRelease
+        if (rel == null) {
+            log("先点「检查更新」，确认有新版再下载")
+            return
+        }
+        launchStep("下载更新") {
+            log("开始下载 ${rel.apkName}")
+            var lastBucket = -1
+            val file = UpdateChecker.download(rel, this@MainActivity) { p ->
+                val bucket = p / 10 * 10
+                if (bucket != lastBucket) {
+                    lastBucket = bucket
+                    log("  $bucket%")
+                }
+            }
+            if (file == null) {
+                log("下载失败，检查网络或 token")
+                return@launchStep
+            }
+            log("已下载 ${file.length() / 1024 / 1024} MB")
+            log(UpdateChecker.install(this@MainActivity, file))
+        }
+    }
+
     // ---------------- 基础设施 ----------------
 
     private fun launchStep(title: String, block: suspend () -> Unit) {
@@ -544,6 +614,7 @@ class MainActivity : Activity() {
         etMaxDelay.setText(cfg.getInt("ar_max", 12).toString())
         etCooldown.setText(cfg.getInt("ar_cool", 180).toString())
         etDailyLimit.setText(cfg.getInt("ar_limit", 100).toString())
+        etGhToken.setText(cfg.getString("gh_token", ""))
     }
 
     private fun saveConfig(
