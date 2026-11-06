@@ -117,44 +117,50 @@ object RootShell {
     }
 
     /**
-     * 微信数据目录在 **su 所在 namespace 里** 真正可访问的根路径。
+     * 微信数据目录的实际路径候选。
      *
-     * Android 10+ 起，用户的 CE 存储（/data/user/0）是在「每用户 mount namespace」
-     * 里挂载的。KernelSU 的 su 跑在 init 的 namespace，那里 /data/user/0 是空的，
-     * 所以 `ls /data/data/com.tencent.mm` 报的是 **No such file**（不是权限拒绝）。
+     * 踩过的坑：一直按 `/data/user/0/com.tencent.mm` 找，结果报 **No such file**。
+     * 真相是微信用的是「手机分身」（XSpace）—— 进程属于 user 999：
+     *     u999_a15  14544  ...  com.tencent.mm
+     * 它的数据在 `/data/user/999/com.tencent.mm`，user 0 下压根没有这个目录。
      *
-     * 解法：借微信自己进程的 namespace —— `/proc/<pid>/root` 会解析到那个进程的根，
-     * 路径按它的挂载表走。不需要 nsenter，也不依赖 su 的实现。
-     *
-     * 返回值可能是：
-     *   /data/user/0/com.tencent.mm                      （直接可访问时）
-     *   /proc/12345/root/data/user/0/com.tencent.mm      （借 namespace 时）
+     * 所以先列 `/data/user` 下所有用户，再按进程 uid 反推（uid/100000 = userId），
+     * 两条独立的线索互相兜底。
      */
+    fun wxCandidates(): List<String> {
+        val out = LinkedHashSet<String>()
+
+        exec("ls -1 /data/user 2>/dev/null", 10).out
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.all { c -> c.isDigit() } }
+            .forEach { u -> out += "/data/user/$u/${WxPaths.WX_PKG}" }
+
+        // 从微信进程的 uid 反推用户：uid = userId * 100000 + appId
+        val pid = exec("pidof com.tencent.mm 2>/dev/null | tr ' ' '\\n' | head -1", 8).out.trim()
+        if (pid.isNotEmpty() && pid.all { c -> c.isDigit() }) {
+            val uid = exec("stat -c '%u' /proc/$pid 2>/dev/null", 8).out.trim().toLongOrNull()
+            if (uid != null && uid > 0) out += "/data/user/${uid / 100000}/${WxPaths.WX_PKG}"
+        }
+
+        out += "/data/data/${WxPaths.WX_PKG}"
+        return out.toList()
+    }
+
+    /** 只有真的含微信数据的目录才算数 —— 空目录可能是以前误建的 */
+    private fun isWxDataRoot(p: String): Boolean =
+        exists("$p/MicroMsg") || exists("$p/shared_prefs")
+
     @Volatile
     private var wxRootCached: String? = null
 
     fun wxRoot(refresh: Boolean = false): String {
         if (!refresh) wxRootCached?.let { return it }
-
-        WxPaths.wxDataDirs().firstOrNull { exists(it) }?.let {
-            wxRootCached = it
-            return it
-        }
-
-        val pid = exec("pidof com.tencent.mm 2>/dev/null | tr ' ' '\\n' | head -1", 8)
-            .out.trim()
-        if (pid.isNotEmpty() && pid.all { c -> c.isDigit() }) {
-            WxPaths.wxDataDirs()
-                .map { "/proc/$pid/root$it" }
-                .firstOrNull { exists(it) }
-                ?.let {
-                    wxRootCached = it
-                    return it
-                }
-        }
-
-        wxRootCached = WxPaths.WX_DATA_USER
-        return WxPaths.WX_DATA_USER
+        val hit = wxCandidates().firstOrNull { isWxDataRoot(it) }
+            ?: wxCandidates().firstOrNull { exists(it) }
+            ?: WxPaths.WX_DATA_USER
+        wxRootCached = hit
+        return hit
     }
 
     /** 把任意写法的微信路径映射成当前 namespace 下真正能访问的路径 */
@@ -179,23 +185,21 @@ object RootShell {
      * 这段不做任何过滤，把 uid / SELinux 上下文 / 真实报错全打出来。
      */
     fun diagnose(): String {
-        val q = "${'$'}"
+        val cands = wxCandidates()
+        val candList = cands.joinToString("  ") { it }
+        val root = wxRoot()
+        val prefs = "$root/shared_prefs/wxbridge.xml"
         val cmd = """
             echo '= uid ='; id 2>&1
             echo '= 当前 SELinux 上下文 ='; cat /proc/self/attr/current 2>&1
             echo '= getenforce ='; getenforce 2>&1
             echo '= su 位置 ='; command -v su 2>&1
-            echo '= namespace ='; readlink /proc/self/ns/mnt 2>&1
-            echo '= 微信 pid ='; pidof com.tencent.mm 2>&1
-            echo '= 直接访问 /data/data ='; ls -ld /data/data/com.tencent.mm 2>&1
-            echo '= 直接访问 /data/user/0 ='; ls -ld /data/user/0/com.tencent.mm 2>&1
-            echo '= 选中的根路径 ='; echo '${wxRoot()}'
-            P=${q}(pidof com.tencent.mm 2>/dev/null | tr ' ' '\n' | head -1)
-            echo '= 借 namespace 访问 ='; ls -ld "/proc/${q}P/root/data/user/0/com.tencent.mm" 2>&1
-            echo '= 密码文件（借 namespace）='
-            ls -l "/proc/${q}P/root/data/user/0/com.tencent.mm/shared_prefs/wxbridge.xml" 2>&1
-            echo '= 当前可访问的密码文件 ='
-            ls -l '${wxPath(WxPaths.WX_DATA_USER + "/shared_prefs/wxbridge.xml")}' 2>&1
+            echo '= 微信进程 ='; ps -A 2>/dev/null | grep -i 'com.tencent.mm' | head -3
+            echo '= 用户列表 ='; ls -1 /data/user 2>&1 | head -6
+            echo '= 候选目录 ='; echo '$candList'
+            echo '= 选中的根路径 ='; echo '$root'
+            echo '= 根目录内容 ='; ls -1d '$root'/* 2>&1 | head -6
+            echo '= 密码文件 ='; ls -l '$prefs' 2>&1
         """.trimIndent()
         val r = exec(cmd, 20)
         return (r.out + if (r.err.isNotBlank()) "\n[stderr] ${r.err}" else "").trim()

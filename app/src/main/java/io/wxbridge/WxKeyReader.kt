@@ -65,10 +65,13 @@ object WxKeyReader {
             return Result.Fail("没有 root 权限")
         }
 
-        val xml = readFirst(WxPaths.prefsFiles().map { RootShell.wxPath(it) })
+        // 微信可能装在「手机分身」里（user 999），所以候选路径要按实际用户枚举
+        val prefsCandidates = RootShell.wxCandidates()
+            .map { "$it/shared_prefs/wxbridge.xml" }
+        val xml = readFirst(prefsCandidates)
             ?: return Result.Fail(
                 "读不到密码文件，试过这些路径：\n" +
-                    WxPaths.prefsFiles().joinToString("\n") { "  · $it" } + "\n" +
+                    prefsCandidates.joinToString("\n") { "  · $it" } + "\n" +
                     "→ 确认 LSPosed 里模块已启用、作用域勾了微信\n" +
                     "→ 然后冷启动（强行停止后重开）微信"
             )

@@ -362,11 +362,7 @@ internal object AutoReplyEngine {
     // ---------------- 配置与日志 ----------------
 
     private fun loadCfg(): AutoReplyConfig? {
-        // 两种路径写法在微信进程里指向同一个目录，谁存在用谁
-        val f = listOf(AutoReplyPaths.CFG_MODULE, AutoReplyPaths.CFG_LEGACY)
-            .map { File(it) }
-            .firstOrNull { it.exists() }
-            ?: return null
+        val f = cfgFile() ?: return null
         val mtime = f.lastModified()
         if (mtime != lastCfgMtime) {
             lastCfgMtime = mtime
@@ -376,10 +372,30 @@ internal object AutoReplyEngine {
         return cfg
     }
 
+    /**
+     * 微信可能装在「手机分身」里（user 999），写死 /data/user/0 会指向不存在的目录。
+     * 直接问微信自己：context.filesDir 永远是当前用户下它自己的 files 目录。
+     */
+    private fun wxFilesDir(): File? {
+        val app = runCatching { android.app.AndroidAppHelper.currentApplication() }.getOrNull()
+        return app?.filesDir
+    }
+
+    private fun cfgFile(): File? {
+        wxFilesDir()?.let { d ->
+            val f = File(d, "wxbridge/cfg.json")
+            if (f.exists()) return f
+        }
+        return listOf(AutoReplyPaths.CFG_MODULE, AutoReplyPaths.CFG_LEGACY)
+            .map { File(it) }
+            .firstOrNull { it.exists() }
+    }
+
     private fun log(msg: String) {
         xlog("[$TAG] $msg")
         runCatching {
-            val f = File(AutoReplyPaths.LOG_MODULE)
+            val f = wxFilesDir()?.let { File(it, "wxbridge/reply.log") }
+                ?: File(AutoReplyPaths.LOG_MODULE)
             f.parentFile?.mkdirs()
             if (!f.exists()) f.createNewFile()
             val line = "${SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA).format(Date())} $msg\n"
