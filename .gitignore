@@ -26,3 +26,6 @@ secrets.properties
 
 # 本地会话记忆，属于个人工作区，不进公开仓库
 .workbuddy/
+
+# 编辑器配置
+.vscode/
