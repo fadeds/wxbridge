@@ -317,6 +317,8 @@ class MainActivity : Activity() {
                 log("→ 没有 root，后面三步都走不通。先确认 Magisk/KernelSU 授权了本 App。")
                 return@launchStep
             }
+            val cleaned = withContext(Dispatchers.IO) { RootShell.cleanPhantom() }
+            if (cleaned) log("已清理历史误建的空目录 /data/user/0/com.tencent.mm")
             val diag = withContext(Dispatchers.IO) { RootShell.diagnose() }
             log(diag)
         }

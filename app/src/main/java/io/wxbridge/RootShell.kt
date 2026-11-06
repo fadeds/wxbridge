@@ -119,32 +119,60 @@ object RootShell {
     /**
      * 微信数据目录的实际路径候选。
      *
-     * 踩过的坑：一直按 `/data/user/0/com.tencent.mm` 找，结果报 **No such file**。
-     * 真相是微信用的是「手机分身」（XSpace）—— 进程属于 user 999：
-     *     u999_a15  14544  ...  com.tencent.mm
-     * 它的数据在 `/data/user/999/com.tencent.mm`，user 0 下压根没有这个目录。
+     * 两个坑叠在一起：
      *
-     * 所以先列 `/data/user` 下所有用户，再按进程 uid 反推（uid/100000 = userId），
-     * 两条独立的线索互相兜底。
+     * 1) 微信用的是「手机分身」（XSpace），进程属于 user 999：
+     *        u999_a15  14544  ... com.tencent.mm
+     *    它的数据在 /data/user/999/com.tencent.mm，user 0 下没有。
+     *
+     * 2) 但 su 在 init 的 mount namespace，`ls /data/user` 只能看到 `0` ——
+     *    每个用户的 CE 存储只在各自 user 的 namespace 里挂载。
+     *    所以要借微信进程的 namespace：/proc/<pid>/root/data/user/<uid>/...
+     *
+     * 用户号从进程 uid 反推：uid / 100000 = userId（u999_a15 → 99901015 → 999）。
      */
-    fun wxCandidates(): List<String> {
-        val out = LinkedHashSet<String>()
+    fun wxCandidates(): List<String> = wxCandidatesOf().first
 
-        exec("ls -1 /data/user 2>/dev/null", 10).out
-            .lineSequence()
+    /**
+     * 一次算完：候选列表 + 每个微信进程的 (pid, userId)。
+     * 每次 stat 都是一次 su 调用（约 100ms），不能重复算。
+     */
+    private data class WxProbe(
+        val candidates: List<String>,
+        val procs: List<Pair<Int, Int>>
+    )
+
+    @Volatile
+    private var probeCache: WxProbe? = null
+
+    private fun wxCandidatesOf(force: Boolean = false): WxProbe {
+        if (!force) probeCache?.let { return it }
+
+        val out = LinkedHashSet<String>()
+        val procs = mutableListOf<Pair<Int, Int>>()
+
+        val pids = exec("pidof com.tencent.mm 2>/dev/null", 8).out
+            .trim().split(' ').mapNotNull { it.trim().toIntOrNull() }
+
+        for (pid in pids) {
+            val uid = exec("stat -c '%u' /proc/$pid 2>/dev/null", 8).out.trim().toLongOrNull()
+                ?: continue
+            if (uid <= 0) continue
+            val userId = (uid / 100000).toInt()
+            procs += pid to userId
+            // 借这个进程的 namespace —— 分身的数据只在它自己的 namespace 里
+            out += "/proc/$pid/root/data/user/$userId/${WxPaths.WX_PKG}"
+        }
+        for ((_, u) in procs) out += "/data/user/$u/${WxPaths.WX_PKG}"
+        exec("ls -1 /data/user 2>/dev/null", 8).out.lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() && it.all { c -> c.isDigit() } }
             .forEach { u -> out += "/data/user/$u/${WxPaths.WX_PKG}" }
-
-        // 从微信进程的 uid 反推用户：uid = userId * 100000 + appId
-        val pid = exec("pidof com.tencent.mm 2>/dev/null | tr ' ' '\\n' | head -1", 8).out.trim()
-        if (pid.isNotEmpty() && pid.all { c -> c.isDigit() }) {
-            val uid = exec("stat -c '%u' /proc/$pid 2>/dev/null", 8).out.trim().toLongOrNull()
-            if (uid != null && uid > 0) out += "/data/user/${uid / 100000}/${WxPaths.WX_PKG}"
-        }
-
         out += "/data/data/${WxPaths.WX_PKG}"
-        return out.toList()
+
+        val r = WxProbe(out.toList(), procs)
+        probeCache = r
+        return r
     }
 
     /** 只有真的含微信数据的目录才算数 —— 空目录可能是以前误建的 */
@@ -156,8 +184,10 @@ object RootShell {
 
     fun wxRoot(refresh: Boolean = false): String {
         if (!refresh) wxRootCached?.let { return it }
-        val hit = wxCandidates().firstOrNull { isWxDataRoot(it) }
-            ?: wxCandidates().firstOrNull { exists(it) }
+        val cands = wxCandidatesOf(refresh).candidates
+        // 必须含 MicroMsg 或 shared_prefs 才算命中，否则会被空目录带偏
+        val hit = cands.firstOrNull { isWxDataRoot(it) }
+            ?: cands.firstOrNull { exists("$it/MicroMsg") }
             ?: WxPaths.WX_DATA_USER
         wxRootCached = hit
         return hit
@@ -185,9 +215,11 @@ object RootShell {
      * 这段不做任何过滤，把 uid / SELinux 上下文 / 真实报错全打出来。
      */
     fun diagnose(): String {
-        val cands = wxCandidates()
-        val candList = cands.joinToString("  ") { it }
-        val root = wxRoot()
+        val probe = wxCandidatesOf(force = true)
+        val procLine = probe.procs.joinToString("  ") { (pid, u) -> "pid=$pid user=$u" }
+            .ifBlank { "（没有在跑的微信进程）" }
+        val candList = probe.candidates.joinToString("\n  ")
+        val root = wxRoot(refresh = true)
         val prefs = "$root/shared_prefs/wxbridge.xml"
         val cmd = """
             echo '= uid ='; id 2>&1
@@ -195,14 +227,33 @@ object RootShell {
             echo '= getenforce ='; getenforce 2>&1
             echo '= su 位置 ='; command -v su 2>&1
             echo '= 微信进程 ='; ps -A 2>/dev/null | grep -i 'com.tencent.mm' | head -3
-            echo '= 用户列表 ='; ls -1 /data/user 2>&1 | head -6
-            echo '= 候选目录 ='; echo '$candList'
+            echo '= su 可见用户 ='; ls -1 /data/user 2>&1 | head -6
+            echo '= 解析出的进程与用户 ='; echo '$procLine'
+            echo '= 候选目录 ='; echo '  $candList'
             echo '= 选中的根路径 ='; echo '$root'
             echo '= 根目录内容 ='; ls -1d '$root'/* 2>&1 | head -6
             echo '= 密码文件 ='; ls -l '$prefs' 2>&1
         """.trimIndent()
-        val r = exec(cmd, 20)
+        val r = exec(cmd, 25)
         return (r.out + if (r.err.isNotBlank()) "\n[stderr] ${r.err}" else "").trim()
+    }
+
+    /**
+     * 清掉历史误建的空目录。
+     *
+     * 早先按 /data/data/com.tencent.mm 拼路径写入配置时，`mkdir -p` 在
+     * su 的 namespace 里凭空创建了 /data/user/0/com.tencent.mm，
+     * 之后「目录存在」的判断会被它带偏。rmdir 只删空目录，安全。
+     */
+    fun cleanPhantom(): Boolean {
+        val r = exec(
+            "rmdir '/data/user/0/com.tencent.mm/files/wxbridge' " +
+                "'/data/user/0/com.tencent.mm/files' '/data/user/0/com.tencent.mm' 2>/dev/null && echo 1 || echo 0",
+            10
+        )
+        probeCache = null
+        wxRootCached = null
+        return r.out.trim().endsWith("1")
     }
 
     /** 列目录，返回文件名列表 */
