@@ -32,9 +32,6 @@ internal object SendProbe {
     /** 总共只打这么多条命中，避免刷屏拖慢微信 */
     private var logsLeft = 24
 
-    /** 点击栈只打一次，够用 */
-    private var clickLogged = false
-
     fun install(cl: ClassLoader) {
         // 覆盖 Tinker 的 DelegateLastClassLoader
         runCatching {
@@ -55,30 +52,29 @@ internal object SendProbe {
 
     /**
      * 发送走的协程在存储层之前就切到了线程池，insert 的栈里看不到 UI。
-     * 所以从另一头抓：hook 发送按钮的点击，UI 线程的栈会把整条发送链路露出来。
+     * 所以从另一头抓：hook 点击事件。
+     *
+     * 不猜类名 —— 前 6 次点击全部记录（类名 + id + 精简栈），
+     * 这样即使发送按钮是自定义 View、名字里没有 Send，也能看到它。
      */
+    private var clicksLeft = 6
+
     private fun hookSendClick() {
         runCatching {
-            XposedBridge.hookAllMethods(
-                android.view.View::class.java,
-                "performClick",
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (clickLogged) return
-                        val v = param.thisObject as? android.view.View ?: return
-                        val cn = v.javaClass.name
-                        val looksLikeSend = cn.contains("Send", true) ||
-                            cn.contains("chatting", true) ||
-                            cn.contains("Chatting", true)
-                        if (!looksLikeSend) return
-                        clickLogged = true
-                        xlog("SendProbe 点击: $cn (id=${v.id})")
-                        Thread.currentThread().stackTrace.take(45).forEach { xlog("    at $it") }
-                    }
+            val cb = object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    if (clicksLeft <= 0) return
+                    val v = param.thisObject as? android.view.View ?: return
+                    clicksLeft--
+                    val cn = v.javaClass.name
+                    xlog("SendProbe 点击[$clicksLeft]: $cn id=${v.id} tag=${runCatching { v.tag }.getOrNull()}")
+                    Thread.currentThread().stackTrace.take(14).forEach { xlog("    at $it") }
                 }
-            )
-            xlog("SendProbe: 已 hook View.performClick")
-        }.onFailure { xlog("SendProbe: hook performClick 失败 $it") }
+            }
+            XposedBridge.hookAllMethods(android.view.View::class.java, "performClick", cb)
+            XposedBridge.hookAllMethods(android.view.View::class.java, "callOnClick", cb)
+            xlog("SendProbe: 已 hook View.performClick / callOnClick")
+        }.onFailure { xlog("SendProbe: hook 点击失败 $it") }
     }
 
     private fun hookClass(c: Class<*>) {
