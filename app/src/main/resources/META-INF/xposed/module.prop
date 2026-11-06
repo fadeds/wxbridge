@@ -1,0 +1,8 @@
+id=wxbridge
+name=WxBridge
+version=0.1.0
+versionCode=1
+author=fadeds
+description=读取微信本地聊天记录与图片，交给外部 LLM 摘要与问答；支持可选的自动回复。
+minApiVersion=93
+targetApiVersion=93

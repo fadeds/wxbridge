@@ -1,0 +1,99 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 版本号要用 git 历史算，浅克隆拿不到
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      # 版本号规则：
+      #   打 tag v1.2.3  → versionName = 1.2.3
+      #   普通提交        → versionName = 0.0.0-<sha7>
+      #   versionCode     = 提交总数，单调递增，满足 Android 的安装升级要求
+      - name: Compute version
+        id: ver
+        run: |
+          set -euo pipefail
+          CODE=$(git rev-list --count HEAD)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            NAME="${GITHUB_REF_NAME#v}"
+          else
+            NAME="0.0.0-${GITHUB_SHA::7}"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "→ versionName=$NAME  versionCode=$CODE"
+
+      - name: Accept Android SDK licenses
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKM" ]; then yes | "$SDKM" --licenses > /dev/null 2>&1 || true; fi
+
+      - name: Build release APK
+        run: |
+          gradle :app:assembleRelease --no-daemon --stacktrace \
+            -PversionName=${{ steps.ver.outputs.name }} \
+            -PversionCode=${{ steps.ver.outputs.code }}
+
+      - name: Rename APK
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          SRC=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          cp "$SRC" "out/wx-ai-${{ steps.ver.outputs.name }}.apk"
+          ls -lh out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wx-ai-${{ steps.ver.outputs.name }}
+          path: out/*.apk
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.ver.outputs.name }}
+          files: out/*.apk
+          generate_release_notes: true
+          body: |
+            ## v${{ steps.ver.outputs.name }}
+
+            versionCode: `${{ steps.ver.outputs.code }}`
+
+            ### 安装
+            1. 下载下方 APK 安装
+            2. LSPosed 里启用「WxBridge」，作用域勾选**微信**
+            3. **强制停止微信后重新打开**（不冷启动 WCDB 不会开库，hook 不触发）
+            4. 打开 App，依次点 ① → ② → ③ → ④
+
+            ### 注意
+            - 只读设计：不发送消息、不改数据库
+            - 图片走本地 OCR（离线）+ 可选视觉模型两条通路
+            - 聊天内容会发给你配置的 LLM API，已在本地脱敏，但不等同于加密

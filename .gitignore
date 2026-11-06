@@ -1,0 +1,28 @@
+# Android
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# 签名与密钥，绝不入库
+*.jks
+*.keystore
+keystore.properties
+secrets.properties
+
+# 抓下来的微信数据（万一有人手滑放到工程里）
+/app/src/main/assets/wxdb/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# 本地会话记忆，属于个人工作区，不进公开仓库
+.workbuddy/

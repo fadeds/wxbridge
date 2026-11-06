@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WxBridge</string>
+    <string name="xposed_desc">读取本机微信聊天记录与图片，交给外部 LLM 做摘要与检索。仅读取，不发送消息。</string>
+
+    <string-array name="xposed_scope">
+        <item>com.tencent.mm</item>
+    </string-array>
+</resources>
