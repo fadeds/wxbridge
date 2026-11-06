@@ -113,7 +113,7 @@ internal object DataBridge {
 
     private fun runQuery(sql: String): String {
         val d = db ?: throw IllegalStateException("还没捕获到消息库实例 —— 先在微信里收/发一条消息")
-        return queryRows(d, sql)
+        return queryRows(d, sql).toString()
     }
 
     private fun queryRows(d: Any, sql: String): JSONArray {
