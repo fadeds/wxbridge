@@ -208,6 +208,26 @@ object RootShell {
     }
 
     /**
+     * 在某个微信数据根下找模块写的密码文件。
+     *
+     * 不写死文件名：项目从 wxai 改名到 wxbridge 时 prefs 名字跟着变过，
+     * 老版本留下的是 wxai_bridge.xml。扫目录比猜名字可靠。
+     */
+    fun findKeyPrefs(root: String): String? {
+        val r = exec(
+            "ls -1 '$root/shared_prefs' 2>/dev/null | grep -iE 'wxbridge|wxai' | head -1",
+            10
+        )
+        val name = r.out.trim().lineSequence().firstOrNull()?.trim()
+        if (name.isNullOrEmpty()) return null
+        return "$root/shared_prefs/$name"
+    }
+
+    /** 列 shared_prefs 里所有带 wx 字样的文件，用于诊断 */
+    fun listKeyPrefs(root: String): String =
+        exec("ls -1 '$root/shared_prefs' 2>/dev/null | grep -i 'wx' | head -8", 10).out.trim()
+
+    /**
      * root 全链路诊断。
      *
      * 背景：遇到过「id 返回 uid=0，但 ls 微信目录是空的」——
@@ -221,6 +241,10 @@ object RootShell {
         val candList = probe.candidates.joinToString("\n  ")
         val root = wxRoot(refresh = true)
         val prefs = "$root/shared_prefs/wxbridge.xml"
+        val prefsInfo = probe.candidates.joinToString("\n") { r ->
+            val f = listKeyPrefs(r).replace("\n", " ")
+            "  $r\n      -> " + f.ifBlank { "（无 wx* 文件）" }
+        }
         val cmd = """
             echo '= uid ='; id 2>&1
             echo '= 当前 SELinux 上下文 ='; cat /proc/self/attr/current 2>&1
@@ -232,6 +256,7 @@ object RootShell {
             echo '= 候选目录 ='; echo '  $candList'
             echo '= 选中的根路径 ='; echo '$root'
             echo '= 根目录内容 ='; ls -1d '$root'/* 2>&1 | head -6
+            echo '= 各根下的 wx* 文件 ='; echo '$prefsInfo'
             echo '= 密码文件 ='; ls -l '$prefs' 2>&1
         """.trimIndent()
         val r = exec(cmd, 25)
