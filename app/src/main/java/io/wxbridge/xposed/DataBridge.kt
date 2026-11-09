@@ -142,12 +142,16 @@ internal object DataBridge {
         val o = JSONObject()
         o.put("talker", talker)
         o.put("text", text)
-        val err = WxUiSender.send(text)
-        if (err == null) {
-            o.put("method", "ui-footer")
-        } else {
-            o.put("error", err)
+        // 优先走微信自己的网络层（DexKit 定位到的 NetSceneSendMsg）
+        val apiErr = WxSendApi.send(talker, text)
+        if (apiErr == null) {
+            o.put("method", "netscene")
+            return o.toString()
         }
+        // 兜底：驱动界面
+        val uiErr = WxUiSender.send(text)
+        o.put("apiError", apiErr)
+        if (uiErr == null) o.put("method", "ui-footer") else o.put("error", uiErr)
         return o.toString()
     }
 
@@ -155,6 +159,7 @@ internal object DataBridge {
     private fun info(): String {
         val o = JSONObject()
         o.put("bridge", true)
+        o.put("sendApi", WxSendApi.status)
         val d = db
         o.put("dbReady", d != null)
         if (d != null) {

@@ -32,7 +32,7 @@ class XposedEntry : IXposedHookLoadPackage {
         // 微信主进程才碰聊天库；push/appbrand 等子进程直接跳过，
         // 减少被检测面，也避免在子进程里做无用的 hook。
         if (lpparam.processName == WX_PKG) {
-            hookAppContext()
+            hookAppContext(cl)
             val cl = lpparam.classLoader
             if (cl == null) {
                 xlog("classLoader is null, abort")
@@ -54,7 +54,7 @@ class XposedEntry : IXposedHookLoadPackage {
      * LSPosed 在 Application.attach 之前就加载模块，所以这里一定赶得上；
      * 万一错过了，KeyBridge 内部还有 AndroidAppHelper 兜底。
      */
-    private fun hookAppContext() {
+    private fun hookAppContext(cl: ClassLoader) {
         runCatching {
             XposedHelpers.findAndHookMethod(
                 Application::class.java,
@@ -62,10 +62,15 @@ class XposedEntry : IXposedHookLoadPackage {
                 Context::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
-                        (param.args.getOrNull(0) as? Context)?.let {
-                            KeyBridge.attach(it)
+                        (param.args.getOrNull(0) as? Context)?.let { ctx ->
+                            KeyBridge.attach(ctx)
                             // 数据桥也用这个 Context 注册广播监听
-                            DataBridge.attach(it)
+                            DataBridge.attach(ctx)
+                            // DexKit 解析 dex 要几百毫秒，绝不能占着 Application.attach
+                            Thread {
+                                val apk = ctx.applicationInfo?.sourceDir
+                                if (apk != null) WxSendApi.init(cl, apk)
+                            }.apply { isDaemon = true; name = "wxbridge-dexkit" }.start()
                         }
                     }
                 }

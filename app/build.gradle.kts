@@ -103,6 +103,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
+    // DexKit：运行时按 dex 里的字符串常量做结构匹配，
+    // 用来定位被混淆成单字母的发送类（类名/方法名随版本变，日志 tag 不变）
+    implementation("org.luckypray:dexkit:2.0.6")
+
     // SQLCipher for Android（新坐标，老 net.sqlcipher 已废弃）
     implementation("net.zetetic:sqlcipher-android:4.5.4")
     implementation("androidx.sqlite:sqlite:2.4.0")
