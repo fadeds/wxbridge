@@ -37,6 +37,7 @@ internal object DataBridge {
     /** 兜底广播的 action。主通道换掉了，这几个常量只为兼容保留 */
     const val ACTION_REQ = "io.wxbridge.QUERY"
     const val ACTION_SEND = "io.wxbridge.SEND"
+    const val ACTION_ARM = "io.wxbridge.ARM"
     const val ACTION_RES = "io.wxbridge.RESULT"
 
     private const val APP_PKG = "io.wxbridge"
@@ -108,6 +109,15 @@ internal object DataBridge {
                 true to (if (sql.isBlank()) info() else runQuery(sql))
             }
             "send" -> true to sendText(req.optString("talker"), req.optString("text"))
+            // 本次运行的人工放行。不落盘，微信重启就没了
+            "arm" -> {
+                AutoReplyEngine.arm(req.optInt("hours", 12))
+                true to JSONObject().put("armedUntil", AutoReplyEngine.armedUntil()).toString()
+            }
+            "disarm" -> {
+                AutoReplyEngine.disarm()
+                true to JSONObject().put("armedUntil", 0L).toString()
+            }
             else -> false to "未知 op: $op"
         }
     } catch (t: Throwable) {
@@ -122,7 +132,10 @@ internal object DataBridge {
         synchronized(this) {
             if (registered) return
             runCatching {
-                val filter = IntentFilter(ACTION_REQ).apply { addAction(ACTION_SEND) }
+                val filter = IntentFilter(ACTION_REQ).apply {
+                    addAction(ACTION_SEND)
+                    addAction(ACTION_ARM)
+                }
                 if (Build.VERSION.SDK_INT >= 33) {
                     c.registerReceiver(legacyReceiver, filter, Context.RECEIVER_EXPORTED)
                 } else {
@@ -149,10 +162,18 @@ internal object DataBridge {
             }
 
             val req = JSONObject().apply {
-                put("op", if (intent.action == ACTION_SEND) "send" else "query")
+                put(
+                    "op",
+                    when (intent.action) {
+                        ACTION_SEND -> "send"
+                        ACTION_ARM -> if (intent.getBooleanExtra("disarm", false)) "disarm" else "arm"
+                        else -> "query"
+                    }
+                )
                 put("sql", intent.getStringExtra("sql") ?: "")
                 put("talker", intent.getStringExtra("talker") ?: "")
                 put("text", intent.getStringExtra("text") ?: "")
+                put("hours", intent.getIntExtra("hours", 12))
             }
 
             // 查询可能耗时，绝不能占着广播线程
@@ -223,6 +244,8 @@ internal object DataBridge {
         o.put("bridge", true)
         o.put("socketUp", BridgeServer.isUp)
         o.put("sendApi", WxSendApi.status)
+        // 本次运行是否已人工放行（0 = 未放行）。微信重启后必然回到 0
+        o.put("armedUntil", AutoReplyEngine.armedUntil())
 
         val app = runCatching { android.app.AndroidAppHelper.currentApplication() }.getOrNull()
         val ver = runCatching {

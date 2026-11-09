@@ -32,6 +32,7 @@ object ModuleBridge {
 
     private const val ACTION_REQ = "io.wxbridge.QUERY"
     private const val ACTION_SEND = "io.wxbridge.SEND"
+    private const val ACTION_ARM = "io.wxbridge.ARM"
     private const val ACTION_RES = "io.wxbridge.RESULT"
     private const val WX_PKG = "com.tencent.mm"
 
@@ -70,6 +71,18 @@ object ModuleBridge {
     fun send(ctx: Context, talker: String, text: String, timeoutMs: Long = 12_000): Result =
         call(ctx, timeoutMs, "send", "", talker, text)
 
+    /**
+     * 本次运行放行自动回复。
+     *
+     * 「放行」只活在微信进程的内存里：微信重启就没了，必须再点一次。
+     * 配置里的 enabled 只是意愿，两者同时成立才会真的动。
+     */
+    fun arm(ctx: Context, hours: Int = 12, timeoutMs: Long = 10_000): Result =
+        call(ctx, timeoutMs, "arm", "", null, null, hours)
+
+    fun disarm(ctx: Context, timeoutMs: Long = 10_000): Result =
+        call(ctx, timeoutMs, "disarm", "", null, null, 0)
+
     // ---------------- 主流程 ----------------
 
     private fun call(
@@ -78,13 +91,15 @@ object ModuleBridge {
         op: String,
         sql: String,
         talker: String?,
-        text: String?
+        text: String?,
+        hours: Int = 0
     ): Result {
         val req = JSONObject().apply {
             put("op", op)
             put("sql", sql)
             if (talker != null) put("talker", talker)
             if (text != null) put("text", text)
+            if (hours > 0) put("hours", hours)
         }
 
         // 这里刻意不用「先判空、再赋值」那套写法：
@@ -230,6 +245,10 @@ object ModuleBridge {
                 intent.action = ACTION_SEND
                 intent.putExtra("talker", req.optString("talker"))
                 intent.putExtra("text", req.optString("text"))
+            } else if (req.optString("op") == "arm" || req.optString("op") == "disarm") {
+                intent.action = ACTION_ARM
+                intent.putExtra("hours", req.optInt("hours", 12))
+                intent.putExtra("disarm", req.optString("op") == "disarm")
             } else {
                 intent.action = ACTION_REQ
                 intent.putExtra("sql", req.optString("sql"))

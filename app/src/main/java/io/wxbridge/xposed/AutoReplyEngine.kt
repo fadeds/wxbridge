@@ -63,6 +63,23 @@ internal object AutoReplyEngine {
     /** 版本闸门只提示一次，避免每条消息都刷日志 */
     private var versionWarned = false
 
+    /**
+     * 本次运行的人工放行截止时间（毫秒）。
+     *
+     * 配置里的 `enabled` 只表达「意愿」，真正能不能动还要求这个值：
+     *   - 只存在于内存，**进程重启即归零**（微信重启就要重新点一次）
+     *   - 有 12 小时上限，避免点完忘了，半夜自己跑一整夜
+     *
+     * 起因是 2026-11-09 那次「账号异常，请重新登录」：账号已经被风控标记的时候，
+     * 配置里 enabled=true 会让模块一登录就接着自动发消息，等于往枪口上撞。
+     * 双钥匙之后，人和进程都必须点头才行。
+     */
+    @Volatile
+    private var armedUntilMs = 0L
+
+    /** 未放行只提示一次，别每条消息都刷 */
+    private var armedWarned = false
+
     /** 去重：同一条消息可能被 insert 多次（微信常先插入再更新） */
     private val seen = LinkedHashMap<String, Unit>()
 
@@ -156,6 +173,13 @@ internal object AutoReplyEngine {
 
     private fun consider(m: Row, c: AutoReplyConfig) {
         if (!versionAllowed(c)) return
+        if (!armed()) {
+            if (!armedWarned) {
+                armedWarned = true
+                log("收到消息但本次运行没有放行自动回复，跳过（在 App 里点「本次放行」才生效，微信重启后要重新点）")
+            }
+            return
+        }
         if (!WxSender.textAvailable() && !WxSender.emojiAvailable()) return
         if (m.content.isBlank() && m.type != 47) return
 
@@ -293,6 +317,38 @@ internal object AutoReplyEngine {
     private fun delayOf(c: AutoReplyConfig): Int =
         if (c.maxDelaySec > c.minDelaySec) Random.nextInt(c.minDelaySec, c.maxDelaySec + 1)
         else c.minDelaySec
+
+    // ---------------- 本次运行的人工放行 ----------------
+
+    /**
+     * 放行 hours 小时。**不落盘**，只活在内存里：微信进程一重启就失效，
+     * 必须人再点一次。上限 12 小时，防止点完忘了。
+     */
+    fun arm(hours: Int) {
+        val h = hours.coerceIn(1, 12)
+        armedUntilMs = System.currentTimeMillis() + h * 3_600_000L
+        armedWarned = false
+        log("已放行自动回复 ${h} 小时（微信重启即失效）")
+    }
+
+    fun disarm() {
+        armedUntilMs = 0L
+        log("已收回自动回复放行")
+    }
+
+    /** 剩余放行时间，0 表示未放行；给自检接口用 */
+    fun armedUntil(): Long = armedUntilMs
+
+    private fun armed(): Boolean {
+        val u = armedUntilMs
+        if (u == 0L) return false
+        if (System.currentTimeMillis() >= u) {
+            // 到期后清掉，下次要重新点
+            armedUntilMs = 0L
+            return false
+        }
+        return true
+    }
 
     // ---------------- 版本闸门 ----------------
 

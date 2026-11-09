@@ -255,6 +255,20 @@ class MainActivity : Activity() {
             "回复日志" to { showAutoReplyLog() }
         ))
 
+        // 双钥匙：配置里的「启用」只表达意愿，真正动笔还需要这里的人工放行。
+        // 起因是 2026-11-09 账号被风控标记后重新登录，配置里 enabled=true 会让
+        // 模块一登录就接着自动发消息。
+        root.addView(TextView(this).apply {
+            textSize = 11f
+            setPadding(0, 10, 0, 2)
+            text = "「启用」只表示意愿。每次微信重启后还要在这里手动放行一次才真的会回复；" +
+                "放行只存在内存里，最多 12 小时。"
+        })
+        root.addView(actionRow(
+            "本次放行 12h" to { doArm() },
+            "收回放行" to { doDisarm() }
+        ))
+
         root.addView(sectionTitle("草稿箱（草稿模式下生成）"))
         draftsNote = TextView(this).apply {
             textSize = 11f
@@ -479,7 +493,18 @@ class MainActivity : Activity() {
                     log("失败：${self.reason}")
                     return@launchStep
                 }
-                is ModuleBridge.Result.Ok -> log("自检：${self.json.take(1500)}")
+                is ModuleBridge.Result.Ok -> {
+                    log("自检：${self.json.take(1500)}")
+                    runCatching {
+                        val u = org.json.JSONObject(self.json).optLong("armedUntil", 0L)
+                        if (u > 0L) {
+                            val at = android.text.format.DateFormat.format("HH:mm", u)
+                            log("自动回复放行：有效至 $at（微信重启即失效）")
+                        } else {
+                            log("自动回复放行：未放行 —— 本次微信运行不会自动回复")
+                        }
+                    }
+                }
             }
 
             val sql = "SELECT * FROM message ORDER BY rowid DESC LIMIT 3"
@@ -660,6 +685,29 @@ class MainActivity : Activity() {
                 if (conf.enabled) log("建议先把自己小号放进白名单试一条，别直接开全量")
             } else {
                 log("写入失败：$err")
+            }
+        }
+    }
+
+    /** 本次运行放行自动回复（不落盘，微信重启即失效） */
+    private fun doArm() {
+        launchStep("放行自动回复") {
+            val r = withContext(Dispatchers.IO) { ModuleBridge.arm(this@MainActivity, 12) }
+            when (r) {
+                is ModuleBridge.Result.Ok -> {
+                    log("已放行 12 小时。微信重启后失效，要重新点一次")
+                    log("通道：${ModuleBridge.lastChannel}")
+                }
+                is ModuleBridge.Result.Fail -> log("放行失败：${r.reason}")
+            }
+        }
+    }
+
+    private fun doDisarm() {
+        launchStep("收回放行") {
+            when (val r = withContext(Dispatchers.IO) { ModuleBridge.disarm(this@MainActivity) }) {
+                is ModuleBridge.Result.Ok -> log("已收回放行，模块不会再自动回复")
+                is ModuleBridge.Result.Fail -> log("收回失败：${r.reason}")
             }
         }
     }
