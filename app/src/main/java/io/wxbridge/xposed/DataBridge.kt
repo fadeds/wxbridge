@@ -7,6 +7,8 @@ import android.content.IntentFilter
 import android.database.Cursor
 import android.os.Build
 import android.util.Base64
+import de.robv.android.xposed.XposedHelpers
+import java.lang.reflect.Modifier
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -29,6 +31,7 @@ import org.json.JSONObject
 internal object DataBridge {
 
     const val ACTION_REQ = "io.wxbridge.QUERY"
+    const val ACTION_SEND = "io.wxbridge.SEND"
     const val ACTION_RES = "io.wxbridge.RESULT"
 
     private const val APP_PKG = "io.wxbridge"
@@ -43,6 +46,14 @@ internal object DataBridge {
 
     @Volatile
     private var registered = false
+
+    /** 微信的 ClassLoader，反射找发送类要用 */
+    @Volatile
+    private var cl: ClassLoader? = null
+
+    fun install(classLoader: ClassLoader) {
+        cl = classLoader
+    }
 
     fun attach(c: Context) {
         ctx = c.applicationContext ?: c
@@ -77,7 +88,7 @@ internal object DataBridge {
         synchronized(this) {
             if (registered) return
             runCatching {
-                val filter = IntentFilter(ACTION_REQ)
+                val filter = IntentFilter(ACTION_REQ).apply { addAction(ACTION_SEND) }
                 if (Build.VERSION.SDK_INT >= 33) {
                     c.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
                 } else {
@@ -99,13 +110,45 @@ internal object DataBridge {
                 var error: String? = null
                 var payload = ""
                 try {
-                    payload = if (sql.isBlank()) info() else runQuery(sql)
+                    payload = if (intent?.action == ACTION_SEND) {
+                        sendText(
+                            intent.getStringExtra("talker") ?: "",
+                            intent.getStringExtra("text") ?: ""
+                        )
+                    } else if (sql.isBlank()) info() else runQuery(sql)
                 } catch (t: Throwable) {
                     error = "${t.javaClass.simpleName}: ${t.message}"
                 }
                 reply(reqId, payload, error)
             }.apply { isDaemon = true }.start()
         }
+    }
+
+    /**
+     * 发一条文本。
+     *
+     * 候选来自包扫描：`com.tencent.mm.pluginsdk.ui.chat.va#a(String, String)` 是静态方法，
+     * 不需要 ChatFooter 实例，最适合直接调用。参数顺序按 (talker, content) 猜的先试，
+     * 失败再把两者对调一次 —— 这样一次调用就能确定顺序。
+     */
+    private fun sendText(talker: String, text: String): String {
+        val o = JSONObject()
+        o.put("talker", talker)
+        o.put("text", text)
+        val loader = cl ?: throw IllegalStateException("ClassLoader 未初始化")
+
+        val c = XposedHelpers.findClass("com.tencent.mm.pluginsdk.ui.chat.va", loader)
+        val m = c.declaredMethods.firstOrNull {
+            it.name == "a" && Modifier.isStatic(it.modifiers) && it.parameterCount == 2 &&
+                it.parameterTypes[0] == String::class.java &&
+                it.parameterTypes[1] == String::class.java
+        } ?: throw IllegalStateException("va#a(String,String) 未找到")
+
+        m.isAccessible = true
+        val r = m.invoke(null, talker, text)
+        o.put("method", "va#a")
+        o.put("return", r?.toString() ?: "null")
+        return o.toString()
     }
 
     /** 空 SQL 表示「自检」：告诉 App 桥通了没、库有没有、有哪些表 */

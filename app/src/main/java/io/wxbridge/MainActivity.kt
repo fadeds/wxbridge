@@ -184,7 +184,8 @@ class MainActivity : Activity() {
         ))
         root.addView(actionRow(
             "⑤ 库结构扫描" to { doScanDbs() },
-            "⑥ 模块查询" to { doBridgeCheck() }
+            "⑥ 模块查询" to { doBridgeCheck() },
+            "⑦ 发送测试" to { doSendTest() }
         ))
 
         root.addView(sectionTitle("自动回复（写操作 · 有封号风险）"))
@@ -457,6 +458,60 @@ class MainActivity : Activity() {
                     log(r.json.take(2500))
                 }
                 is ModuleBridge.Result.Fail -> log("查询失败：${r.reason}")
+            }
+        }
+    }
+
+    /**
+     * 端到端验证发送：找最近一条收到的消息的 talker，回一句测试文本，
+     * 再查库确认多了一条 isSend=1 的记录。
+     *
+     * 注意：这会真的发一条微信消息出去，只发给自己（最近联系人）。
+     */
+    private fun doSendTest() {
+        launchStep("发送测试") {
+            val lastTalker = withContext(Dispatchers.IO) {
+                ModuleBridge.query(
+                    this@MainActivity,
+                    "SELECT talker FROM message WHERE isSend=0 ORDER BY createTime DESC LIMIT 1"
+                )
+            }
+            val talker = when (lastTalker) {
+                is ModuleBridge.Result.Fail -> {
+                    log("取最近会话失败：${lastTalker.reason}")
+                    return@launchStep
+                }
+                is ModuleBridge.Result.Ok -> Regex("\"talker\"\\s*:\\s*\"([^\"]+)\"")
+                    .find(lastTalker.json)?.groupValues?.get(1)
+            }
+            if (talker.isNullOrBlank()) {
+                log("没查到最近会话的 talker")
+                return@launchStep
+            }
+            log("目标: $talker")
+
+            val text = "WxBridge 测试 " + android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis())
+            log("发送: $text")
+            when (val r = withContext(Dispatchers.IO) { ModuleBridge.send(this@MainActivity, talker, text) }) {
+                is ModuleBridge.Result.Ok -> log("模块返回：${r.json.take(600)}")
+                is ModuleBridge.Result.Fail -> {
+                    log("发送失败：${r.reason}")
+                    return@launchStep
+                }
+            }
+
+            // 给微信 3 秒落库
+            kotlinx.coroutines.delay(3000)
+            val check = withContext(Dispatchers.IO) {
+                ModuleBridge.query(
+                    this@MainActivity,
+                    "SELECT msgId,isSend,content,createTime FROM message " +
+                        "WHERE talker='$talker' ORDER BY msgId DESC LIMIT 2"
+                )
+            }
+            when (check) {
+                is ModuleBridge.Result.Ok -> log("落库核对：${check.json.take(800)}")
+                is ModuleBridge.Result.Fail -> log("核对失败：${check.reason}")
             }
         }
     }

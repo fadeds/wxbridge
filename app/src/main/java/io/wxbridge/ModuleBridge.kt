@@ -9,9 +9,9 @@ import android.util.Base64
 import java.util.TreeMap
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.TimeUnit
 
 /**
  * App 侧调用模块的客户端。
@@ -20,11 +20,12 @@ import java.util.concurrent.TimeUnit
  * su 在 init 的 mount namespace 里看不到应用的 CE 存储，
  * 而模块本身就在微信进程里，手里有解密态的库实例 —— 让它查完直接广播回来最快。
  *
- * 注意：query() 会阻塞等待广播回来，**必须放在 IO 线程调用**。
+ * 注意：这些方法都会阻塞等待广播回来，**必须放在 IO 线程调用**。
  */
 object ModuleBridge {
 
     private const val ACTION_REQ = "io.wxbridge.QUERY"
+    private const val ACTION_SEND = "io.wxbridge.SEND"
     private const val ACTION_RES = "io.wxbridge.RESULT"
     private const val WX_PKG = "com.tencent.mm"
 
@@ -33,10 +34,22 @@ object ModuleBridge {
         data class Fail(val reason: String) : Result()
     }
 
-    /**
-     * @param sql 空字符串表示自检：只问模块「桥通了吗、库拿到了吗」
-     */
-    fun query(ctx: Context, sql: String, timeoutMs: Long = 10_000): Result {
+    /** 查库。sql 为空表示自检：只问模块「桥通了吗、库拿到了吗」 */
+    fun query(ctx: Context, sql: String, timeoutMs: Long = 10_000): Result =
+        call(ctx, timeoutMs) {
+            action = ACTION_REQ
+            putExtra("sql", sql)
+        }
+
+    /** 发一条文本消息。talker 是 wxid 或群 id */
+    fun send(ctx: Context, talker: String, text: String, timeoutMs: Long = 12_000): Result =
+        call(ctx, timeoutMs) {
+            action = ACTION_SEND
+            putExtra("talker", talker)
+            putExtra("text", text)
+        }
+
+    private fun call(ctx: Context, timeoutMs: Long, fill: Intent.() -> Unit): Result {
         val reqId = UUID.randomUUID().toString()
         val chunks = TreeMap<Int, String>()
         val latch = CountDownLatch(1)
@@ -70,12 +83,10 @@ object ModuleBridge {
         }
 
         return try {
-            ctx.sendBroadcast(
-                Intent(ACTION_REQ)
-                    .setPackage(WX_PKG)
-                    .putExtra("reqId", reqId)
-                    .putExtra("sql", sql)
-            )
+            val intent = Intent().setPackage(WX_PKG).putExtra("reqId", reqId)
+            intent.fill()
+            ctx.sendBroadcast(intent)
+
             if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
                 return Result.Fail(
                     "模块没有回包（${timeoutMs}ms 超时）。\n" +

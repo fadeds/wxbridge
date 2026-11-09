@@ -27,6 +27,20 @@ internal object SendProbe {
         "yh0.p"
     )
 
+    /**
+     * 需要挂的发送相关类 → 方法名。
+     *
+     * 必须按「类真正被加载时」挂：微信开 Tinker，
+     * findClass(name, 主 ClassLoader) 拿到的是没人用的那份 Class，
+     * 日志显示 hook 成功但一次都不触发（已经踩过四次）。
+     */
+    private val WATCH: Map<String, List<String>> = mapOf(
+        "com.tencent.mm.pluginsdk.ui.chat.ChatFooter" to listOf("F0", "N1", "y"),
+        "com.tencent.mm.pluginsdk.ui.chat.va" to listOf("a"),
+        "com.tencent.mm.pluginsdk.ui.chat.z1" to listOf("onClick"),
+        "com.tencent.mm.pluginsdk.ui.chat.q2" to listOf("onClick")
+    )
+
     private val hooked = java.util.Collections.synchronizedSet(HashSet<String>())
 
     /** 总共只打这么多条命中，避免刷屏拖慢微信 */
@@ -39,6 +53,7 @@ internal object SendProbe {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     val c = param.result as? Class<*> ?: return
                     if (SUSPECT.contains(c.name)) hookClass(c)
+                    WATCH[c.name]?.let { names -> hookNamedOn(c, names) }
                 }
             })
         }.onFailure { xlog("SendProbe: hook loadClass 失败 $it") }
@@ -134,7 +149,16 @@ internal object SendProbe {
 
     private fun hookNamed(className: String, methodNames: List<String>, cl: ClassLoader) {
         runCatching {
-            val c = XposedHelpers.findClass(className, cl)
+            hookNamedOn(XposedHelpers.findClass(className, cl), methodNames)
+        }.onFailure { xlog("SendProbe: hook $className 失败 ${it.message}") }
+    }
+
+    private val namedHooked = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    private fun hookNamedOn(c: Class<*>, methodNames: List<String>) {
+        val key = "${c.name}@${System.identityHashCode(c.classLoader)}"
+        if (!namedHooked.add(key)) return
+        runCatching {
             var n = 0
             for (m in c.declaredMethods) {
                 if (m.name !in methodNames) continue
@@ -156,8 +180,8 @@ internal object SendProbe {
                     n++
                 }
             }
-            if (n > 0) xlog("SendProbe: 已 hook 候选 $className ×$n")
-        }.onFailure { xlog("SendProbe: hook $className 失败 ${it.message}") }
+            if (n > 0) xlog("SendProbe: 已 hook 候选 ${c.name} ×$n (loader=${c.classLoader?.javaClass?.simpleName})")
+        }.onFailure { xlog("SendProbe: hook ${c.name} 失败 ${it.message}") }
     }
 
     private var candLogsLeft = 8

@@ -37,6 +37,7 @@ class XposedEntry : IXposedHookLoadPackage {
             if (cl == null) {
                 xlog("classLoader is null, abort")
             } else {
+                DataBridge.install(cl)
                 WcdbKeyHook.install(cl)
                 // 自动回复引擎也跑在微信进程：能直接用内存里的库实例和发送 API
                 AutoReplyEngine.start(cl)
