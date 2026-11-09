@@ -125,12 +125,25 @@ internal object WxSendApi {
 
                 for (name in queueNames) {
                     val c = runCatching { cl.loadClass(name) }.getOrNull() ?: continue
-                    // 入队方法：参数是 NetSceneBase、返回 boolean
+
+                    // 入队方法：参数能接受这个发送场景（可能是 NetSceneBase 的某个中间父类），
+                    // 返回 boolean 或 void
                     val post = c.declaredMethods.firstOrNull {
                         it.parameterCount == 1 &&
-                            it.parameterTypes[0].name == baseName &&
-                            it.returnType == java.lang.Boolean.TYPE
-                    } ?: continue
+                            it.parameterTypes[0].isAssignableFrom(sendCls) &&
+                            (it.returnType == java.lang.Boolean.TYPE || it.returnType == Void.TYPE)
+                    }
+                    if (post == null) {
+                        // 诊断：把单参方法都打出来，看真实签名
+                        val sig = c.declaredMethods
+                            .filter { it.parameterCount == 1 }
+                            .take(6)
+                            .joinToString("; ") {
+                                "${it.name}(${it.parameterTypes[0].simpleName})->${it.returnType.simpleName}"
+                            }
+                        xlog("WxSendApi: ${c.name.substringAfterLast('.')} 单参方法: ${sig.ifBlank { "无" }}")
+                        continue
+                    }
                     post.isAccessible = true
                     postToQueue = post
 
