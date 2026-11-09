@@ -7,6 +7,14 @@
     <!-- 应用内更新：下载到 cache 后拉起系统安装器 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!--
+        Android 11+ 的包可见性：不声明的话 getPackageInfo("com.tencent.mm") 直接抛
+        NameNotFoundException，版本闸门就没法在 App 侧显示微信版本了。
+    -->
+    <queries>
+        <package android:name="com.tencent.mm" />
+    </queries>
+
     <!-- 同一 APK 承担两个角色：LSPosed 模块（仅注入微信进程）+ 本机数据管道 App -->
     <application
         android:allowBackup="false"

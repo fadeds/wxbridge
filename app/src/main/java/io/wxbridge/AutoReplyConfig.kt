@@ -40,6 +40,23 @@ data class AutoReplyConfig(
     val dailyLimit: Int = 100,
 
     /**
+     * 草稿模式：只生成不发送。
+     *
+     * 用途不是「给人审」这么简单 —— 升级微信之后的第一两天，用它跑一段
+     * 产出质量可以看出模型有没有跑偏、语气对不对，而不会真的把话发出去。
+     * 草稿落在微信目录的 drafts.jsonl，App 里逐条确认后再发。
+     */
+    val draftOnly: Boolean = false,
+
+    /**
+     * 放行未校验的微信版本。
+     *
+     * 默认 false：版本不在白名单里就只同步不自动回复。
+     * 已验证能正常发送之后，用户可以在界面上勾掉这个限制。
+     */
+    val allowUnverifiedVersion: Boolean = false,
+
+    /**
      * 允许回复里带 emoji。
      * 微信文本消息原生支持 Unicode emoji，直接发字符就能显示成表情，
      * 不需要模拟点击表情面板 —— 这也是不走无障碍方案的原因。
@@ -74,6 +91,8 @@ data class AutoReplyConfig(
         put("maxDelaySec", maxDelaySec)
         put("cooldownSec", cooldownSec)
         put("dailyLimit", dailyLimit)
+        put("draftOnly", draftOnly)
+        put("allowUnverifiedVersion", allowUnverifiedVersion)
         put("allowEmoji", allowEmoji)
         put("autoStickerReply", autoStickerReply)
         put("stickerChance", stickerChance)
@@ -105,6 +124,8 @@ data class AutoReplyConfig(
                 maxDelaySec = o.optInt("maxDelaySec", 12).coerceIn(0, 120),
                 cooldownSec = o.optInt("cooldownSec", 180).coerceAtLeast(10),
                 dailyLimit = o.optInt("dailyLimit", 100).coerceIn(1, 1000),
+                draftOnly = o.optBoolean("draftOnly", false),
+                allowUnverifiedVersion = o.optBoolean("allowUnverifiedVersion", false),
                 allowEmoji = o.optBoolean("allowEmoji", true),
                 autoStickerReply = o.optBoolean("autoStickerReply", true),
                 stickerChance = o.optInt("stickerChance", 50).coerceIn(0, 100),
@@ -128,6 +149,7 @@ object AutoReplyPaths {
     const val DIR_MODULE = WxPaths.WX_DATA_USER + "/files/wxbridge"
     const val CFG_MODULE = DIR_MODULE + "/cfg.json"
     const val LOG_MODULE = DIR_MODULE + "/reply.log"
+    const val DRAFT_MODULE = DIR_MODULE + "/drafts.jsonl"
 
     /** 老写法，模块读配置时兜底 */
     const val CFG_LEGACY = WxPaths.WX_DATA + "/files/wxbridge/cfg.json"
@@ -135,6 +157,7 @@ object AutoReplyPaths {
     fun dirApp(): String = "${RootShell.wxRoot()}/files/wxbridge"
     fun cfgApp(): String = "${dirApp()}/cfg.json"
     fun logApp(): String = "${dirApp()}/reply.log"
+    fun draftApp(): String = "${dirApp()}/drafts.jsonl"
 }
 
 /** App 侧读写（全部走 root） */

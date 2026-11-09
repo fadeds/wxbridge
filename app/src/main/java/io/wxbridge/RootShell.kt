@@ -30,6 +30,18 @@ object RootShell {
         cachedRoot = null
     }
 
+    /**
+     * 清掉微信路径的探测缓存。
+     *
+     * wxRoot() 会把 /proc/<pid>/root/... 这种带 pid 的路径缓存下来，
+     * 微信进程一重启这个 pid 就失效了 —— 之后所有 cat 都读不到文件，
+     * 看起来却像「文件不存在」。通道鉴权失败时要把这层缓存一起清掉再重试。
+     */
+    fun resetPathCache() {
+        probeCache = null
+        wxRootCached = null
+    }
+
     fun exec(cmd: String, timeoutSec: Long = 30): Result {
         val p = ProcessBuilder("su", "-c", cmd).redirectErrorStream(false).start()
         // 必须并发读流，否则输出超过管道缓冲区会死锁

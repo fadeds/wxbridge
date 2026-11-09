@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import io.wxbridge.AutoReplyConfig
 import io.wxbridge.AutoReplyPaths
+import io.wxbridge.WxVersionPolicy
 import io.wxbridge.llm.LlmClient
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -55,6 +56,13 @@ internal object AutoReplyEngine {
     private var dailyCount = 0
     private var dailyDay = -1
 
+    /** 微信版本只读一次，进程内不会变 */
+    @Volatile
+    private var wxVersion: String? = null
+
+    /** 版本闸门只提示一次，避免每条消息都刷日志 */
+    private var versionWarned = false
+
     /** 去重：同一条消息可能被 insert 多次（微信常先插入再更新） */
     private val seen = LinkedHashMap<String, Unit>()
 
@@ -73,6 +81,7 @@ internal object AutoReplyEngine {
 
         WxSender.init(cl)
         xlog("AutoReply: ${WxSender.describe()}")
+        xlog("AutoReply: 微信版本 ${currentVersion() ?: "未知"}，已验证名单 ${WxVersionPolicy.VERIFIED.joinToString()}")
 
         val ex = Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "wxbridge-autoreply").apply { isDaemon = true }
@@ -146,6 +155,7 @@ internal object AutoReplyEngine {
     // ---------------- 规则 ----------------
 
     private fun consider(m: Row, c: AutoReplyConfig) {
+        if (!versionAllowed(c)) return
         if (!WxSender.textAvailable() && !WxSender.emojiAvailable()) return
         if (m.content.isBlank() && m.type != 47) return
 
@@ -189,6 +199,12 @@ internal object AutoReplyEngine {
             }
             47 -> {
                 if (!c.autoStickerReply) return
+                // 表情包没法「审」，草稿模式直接跳过；放在记账之前，
+                // 免得白占一次冷却和日额度
+                if (c.draftOnly) {
+                    log("草稿模式不自动回表情，跳过：${m.talker}")
+                    return
+                }
                 if (Random.nextInt(100) >= c.stickerChance) return
                 lastReplyAt[m.talker] = now
                 dailyCount++
@@ -231,6 +247,17 @@ internal object AutoReplyEngine {
         if (answer.isBlank()) return
         if (answer.length > 200) return  // 异常长，多半是模型跑偏了，丢掉
 
+        // 草稿模式：生成完就停，落盘等人工确认。
+        // 注意这里连随机延迟都不做 —— 草稿不需要拟人节奏，早落盘早能看到。
+        if (c.draftOnly) {
+            val saved = DraftStore.append(m.talker, answer)
+            log(
+                "${if (saved) "草稿已存（未发送）" else "草稿写入失败"} → ${m.talker}: " +
+                    answer.take(60)
+            )
+            return
+        }
+
         val delay = delayOf(c)
         runCatching { Thread.sleep(delay * 1000L) }
 
@@ -241,6 +268,8 @@ internal object AutoReplyEngine {
     // ---------------- 表情包回复 ----------------
 
     private fun replySticker(m: Row, c: AutoReplyConfig) {
+        // 兜底防线：正常路径已经在 consider() 里拦掉了
+        if (c.draftOnly) return
         if (!WxSender.emojiAvailable()) {
             log("表情发送入口不可用，跳过（看启动日志里的「表情=」）")
             return
@@ -264,6 +293,38 @@ internal object AutoReplyEngine {
     private fun delayOf(c: AutoReplyConfig): Int =
         if (c.maxDelaySec > c.minDelaySec) Random.nextInt(c.minDelaySec, c.maxDelaySec + 1)
         else c.minDelaySec
+
+    // ---------------- 版本闸门 ----------------
+
+    private fun currentVersion(): String? {
+        wxVersion?.let { return it }
+        val v = runCatching {
+            android.app.AndroidAppHelper.currentApplication()
+                ?.packageManager?.getPackageInfo(WX_PKG, 0)?.versionName
+        }.getOrNull()
+        wxVersion = v
+        return v
+    }
+
+    /**
+     * 版本不认识就只同步不写。
+     *
+     * hook 层的多候选 + DexKit 匹配只能保证「找得到东西」，不能保证「找到的是对的东西」。
+     * 微信升级后类结构一变，定位可能悄悄落到一个签名相同但语义不同的方法上 ——
+     * 这时候自动回复发出去的内容就不可控了。所以默认拦住，由用户确认后再放行。
+     */
+    private fun versionAllowed(c: AutoReplyConfig): Boolean {
+        val v = currentVersion()
+        if (WxVersionPolicy.isVerified(v) || c.allowUnverifiedVersion) return true
+        if (!versionWarned) {
+            versionWarned = true
+            log(
+                "微信版本 ${v ?: "未知"} 不在已验证名单（${WxVersionPolicy.VERIFIED.joinToString()}）里，" +
+                    "自动回复已暂停，只做同步。确认发送正常后在 App 里勾「放行未校验版本」"
+            )
+        }
+        return false
+    }
 
     // ---------------- 兜底轮询（仅在 hook 失败时启用） ----------------
 

@@ -55,6 +55,10 @@ class MainActivity : Activity() {
     private lateinit var cbAutoPrivate: CheckBox
     private lateinit var cbAutoGroup: CheckBox
     private lateinit var cbAutoWhitelistOnly: CheckBox
+    private lateinit var cbDraftOnly: CheckBox
+    private lateinit var cbAllowUnverified: CheckBox
+    private lateinit var draftsBox: LinearLayout
+    private lateinit var draftsNote: TextView
     private lateinit var cbAllowEmoji: CheckBox
     private lateinit var cbAutoSticker: CheckBox
     private lateinit var etStickerChance: EditText
@@ -235,9 +239,33 @@ class MainActivity : Activity() {
         nums.addView(labeled("日上限", etDailyLimit), w1)
         root.addView(nums)
 
+        cbDraftOnly = CheckBox(this).apply {
+            text = "草稿模式：只生成不发送，在下面逐条确认"
+            isChecked = false
+        }
+        cbAllowUnverified = CheckBox(this).apply {
+            text = "放行未校验的微信版本（先确认发送正常再勾）"
+            isChecked = false
+        }
+        root.addView(cbDraftOnly)
+        root.addView(cbAllowUnverified)
+
         root.addView(actionRow(
             "保存自动回复" to { saveAutoReply() },
             "回复日志" to { showAutoReplyLog() }
+        ))
+
+        root.addView(sectionTitle("草稿箱（草稿模式下生成）"))
+        draftsNote = TextView(this).apply {
+            textSize = 11f
+            text = "草稿由微信进程写入 files/wxbridge/drafts.jsonl，这里读出来逐条确认。"
+        }
+        draftsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(draftsNote)
+        root.addView(draftsBox)
+        root.addView(actionRow(
+            "刷新草稿" to { refreshDrafts() },
+            "全部清空" to { clearDrafts() }
         ))
 
         root.addView(sectionTitle("更新"))
@@ -440,8 +468,11 @@ class MainActivity : Activity() {
      */
     private fun doBridgeCheck() {
         launchStep("模块查询") {
-            log("向微信进程发广播…")
+            log("连接微信进程（本地套接字优先，广播兜底）…")
             val self = withContext(Dispatchers.IO) { ModuleBridge.query(this@MainActivity, "") }
+            log("通道：${ModuleBridge.lastChannel}")
+            val ver = WxVersionPolicy.appVersion(this@MainActivity)
+            log(WxVersionPolicy.describe(ver, cbAllowUnverified.isChecked))
             when (self) {
                 is ModuleBridge.Result.Fail -> {
                     log("失败：${self.reason}")
@@ -577,6 +608,8 @@ class MainActivity : Activity() {
             maxDelaySec = etMaxDelay.text.toString().toIntOrNull() ?: 12,
             cooldownSec = etCooldown.text.toString().toIntOrNull() ?: 180,
             dailyLimit = etDailyLimit.text.toString().toIntOrNull() ?: 100,
+            draftOnly = cbDraftOnly.isChecked,
+            allowUnverifiedVersion = cbAllowUnverified.isChecked,
             allowEmoji = cbAllowEmoji.isChecked,
             autoStickerReply = cbAutoSticker.isChecked,
             stickerChance = etStickerChance.text.toString().toIntOrNull() ?: 50
@@ -651,6 +684,80 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------------- 草稿箱 ----------------
+
+    private fun refreshDrafts() {
+        launchStep("刷新草稿") {
+            val list = withContext(Dispatchers.IO) { Drafts.list() }
+            renderDrafts(list)
+            log(if (list.isEmpty()) "草稿箱是空的" else "共 ${list.size} 条草稿待确认")
+        }
+    }
+
+    /** 重建草稿区。一条一个卡片，避免用 AlertDialog 列表做二次确认时点错 */
+    private fun renderDrafts(list: List<Drafts.Draft>) {
+        draftsNote.text = if (list.isEmpty()) {
+            "草稿箱是空的。开启「草稿模式」后，命中白名单的消息会生成到这里而不是直接发出。"
+        } else {
+            "共 ${list.size} 条待确认（最新的在上）"
+        }
+        draftsBox.removeAllViews()
+        val fmt = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA)
+
+        for (d in list) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, 10, 0, 10)
+            }
+            card.addView(TextView(this).apply {
+                textSize = 11f
+                text = "${fmt.format(java.util.Date(d.ts))}   ${d.talker}"
+            })
+            card.addView(TextView(this).apply {
+                textSize = 14f
+                setTextIsSelectable(true)
+                text = d.text
+            })
+            card.addView(actionRow(
+                "发送" to { sendDraft(d) },
+                "删除" to { deleteDraft(d) }
+            ))
+            draftsBox.addView(card)
+        }
+    }
+
+    private fun sendDraft(d: Drafts.Draft) {
+        launchStep("发送草稿") {
+            when (val r = withContext(Dispatchers.IO) {
+                ModuleBridge.send(this@MainActivity, d.talker, d.text)
+            }) {
+                is ModuleBridge.Result.Ok -> {
+                    log("已发送 → ${d.talker}")
+                    log(r.json.take(300))
+                    withContext(Dispatchers.IO) { Drafts.remove(d.id) }
+                    renderDrafts(withContext(Dispatchers.IO) { Drafts.list() })
+                }
+                is ModuleBridge.Result.Fail -> log("发送失败：${r.reason}")
+            }
+        }
+    }
+
+    private fun deleteDraft(d: Drafts.Draft) {
+        launchStep("删除草稿") {
+            val ok = withContext(Dispatchers.IO) { Drafts.remove(d.id) }
+            log(if (ok) "已删除 1 条草稿" else "删除失败：写微信目录被拒（检查 root）")
+            renderDrafts(withContext(Dispatchers.IO) { Drafts.list() })
+        }
+    }
+
+    private fun clearDrafts() {
+        launchStep("清空草稿") {
+            val ok = withContext(Dispatchers.IO) { Drafts.clear() }
+            log(if (ok) "草稿箱已清空" else "清空失败：写微信目录被拒（检查 root）")
+            renderDrafts(emptyList())
+        }
+    }
+
     /** 所有界面状态落盘到 App 自己的 SharedPreferences，不涉及 root，可以随时调用 */
     private fun persistAllUi() {
         val presetIndex = presetSpinner.selectedItemPosition
@@ -679,6 +786,8 @@ class MainActivity : Activity() {
             .putInt("ar_max", etMaxDelay.text.toString().toIntOrNull() ?: 12)
             .putInt("ar_cool", etCooldown.text.toString().toIntOrNull() ?: 180)
             .putInt("ar_limit", etDailyLimit.text.toString().toIntOrNull() ?: 100)
+            .putBoolean("ar_draft", cbDraftOnly.isChecked)
+            .putBoolean("ar_unverified", cbAllowUnverified.isChecked)
             .putString("gh_token", etGhToken.text.toString().trim())
             .apply()
     }
@@ -842,6 +951,8 @@ class MainActivity : Activity() {
         etMaxDelay.setText(cfg.getInt("ar_max", 12).toString())
         etCooldown.setText(cfg.getInt("ar_cool", 180).toString())
         etDailyLimit.setText(cfg.getInt("ar_limit", 100).toString())
+        cbDraftOnly.isChecked = cfg.getBoolean("ar_draft", false)
+        cbAllowUnverified.isChecked = cfg.getBoolean("ar_unverified", false)
         etGhToken.setText(cfg.getString("gh_token", ""))
 
         // 首次启动（本地没有任何配置记录）时，尝试从微信目录导入。
@@ -870,6 +981,8 @@ class MainActivity : Activity() {
         etMaxDelay.setText(c.maxDelaySec.toString())
         etCooldown.setText(c.cooldownSec.toString())
         etDailyLimit.setText(c.dailyLimit.toString())
+        cbDraftOnly.isChecked = c.draftOnly
+        cbAllowUnverified.isChecked = c.allowUnverifiedVersion
 
         persistAllUi()
         log("已从微信目录导入自动回复配置，和实际生效状态对齐")
