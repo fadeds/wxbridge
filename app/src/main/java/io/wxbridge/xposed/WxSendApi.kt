@@ -129,9 +129,12 @@ internal object WxSendApi {
 
                     // 入队方法：参数能接受这个发送场景（可能是 NetSceneBase 的某个中间父类），
                     // 返回 boolean 或 void
+                    // 注意排除发送场景自身的继承链：n1#accept 也是 (n1)->void 形状，
+                    // 但那是场景基类自己的方法，不是入队
                     val post = c.declaredMethods.firstOrNull {
                         it.parameterCount == 1 &&
                             it.parameterTypes[0].isAssignableFrom(sendCls) &&
+                            !it.declaringClass.isAssignableFrom(sendCls) &&
                             (it.returnType == java.lang.Boolean.TYPE || it.returnType == Void.TYPE)
                     }
                     if (post == null) {
