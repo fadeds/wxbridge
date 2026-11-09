@@ -473,7 +473,9 @@ class MainActivity : Activity() {
             val lastTalker = withContext(Dispatchers.IO) {
                 ModuleBridge.query(
                     this@MainActivity,
-                    "SELECT talker FROM message WHERE isSend=0 ORDER BY createTime DESC LIMIT 1"
+                    "SELECT talker FROM message WHERE isSend=0 AND type=1 " +
+                            "AND talker NOT LIKE 'gh_%' AND talker NOT LIKE '@%' " +
+                            "ORDER BY createTime DESC LIMIT 1"
                 )
             }
             val talker = when (lastTalker) {

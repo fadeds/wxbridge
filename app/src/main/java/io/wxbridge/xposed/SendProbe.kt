@@ -35,10 +35,18 @@ internal object SendProbe {
      * 日志显示 hook 成功但一次都不触发（已经踩过四次）。
      */
     private val WATCH: Map<String, List<String>> = mapOf(
-        "com.tencent.mm.pluginsdk.ui.chat.ChatFooter" to listOf("F0", "N1", "y"),
-        "com.tencent.mm.pluginsdk.ui.chat.va" to listOf("a"),
+        // 发送按钮的点击
         "com.tencent.mm.pluginsdk.ui.chat.z1" to listOf("onClick"),
-        "com.tencent.mm.pluginsdk.ui.chat.q2" to listOf("onClick")
+        "com.tencent.mm.pluginsdk.ui.chat.q2" to listOf("onClick"),
+        // 包扫描出来「带 2 个以上 String 参数」的全部候选。
+        // va#a 已被 ⑦ 验证排除（那是语音转文字的 diff 工具，不是发送）
+        "com.tencent.mm.pluginsdk.ui.chat.ChatFooter" to listOf("F0", "N1", "y"),
+        "com.tencent.mm.pluginsdk.ui.chat.jb" to listOf("a"),
+        "com.tencent.mm.pluginsdk.ui.chat.tg" to listOf("a", "e"),
+        "com.tencent.mm.pluginsdk.ui.chat.ie" to listOf("A"),
+        "com.tencent.mm.pluginsdk.ui.chat.ke" to listOf("c"),
+        "com.tencent.mm.pluginsdk.ui.chat.c" to listOf("a"),
+        "com.tencent.mm.pluginsdk.ui.chat.wf" to listOf("c")
     )
 
     private val hooked = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -143,8 +151,7 @@ internal object SendProbe {
      * 手动发一条，谁被调用、参数谁是 talker 谁是 content，一看便知。
      */
     private fun hookSendCandidates(cl: ClassLoader) {
-        hookNamed("com.tencent.mm.pluginsdk.ui.chat.ChatFooter", listOf("F0", "N1", "y"), cl)
-        hookNamed("com.tencent.mm.pluginsdk.ui.chat.va", listOf("a"), cl)
+        for ((name, methods) in WATCH) hookNamed(name, methods, cl)
     }
 
     private fun hookNamed(className: String, methodNames: List<String>, cl: ClassLoader) {
