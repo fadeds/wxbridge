@@ -32,11 +32,12 @@ class XposedEntry : IXposedHookLoadPackage {
         // 微信主进程才碰聊天库；push/appbrand 等子进程直接跳过，
         // 减少被检测面，也避免在子进程里做无用的 hook。
         if (lpparam.processName == WX_PKG) {
-            hookAppContext(cl)
             val cl = lpparam.classLoader
             if (cl == null) {
                 xlog("classLoader is null, abort")
             } else {
+                // 必须先拿到 cl：里面要在 Application.attach 回调里用它初始化 DexKit
+                hookAppContext(cl)
                 DataBridge.install(cl)
                 WcdbKeyHook.install(cl)
                 // 自动回复引擎也跑在微信进程：能直接用内存里的库实例和发送 API
