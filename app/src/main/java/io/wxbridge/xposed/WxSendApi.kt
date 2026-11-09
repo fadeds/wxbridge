@@ -123,6 +123,7 @@ internal object WxSendApi {
                 val queueNames = queueClasses.mapNotNull { runCatching { it.name }.getOrNull() }
                 xlog("WxSendApi: 队列候选 ${queueNames.size} 个：${queueNames.take(4)}")
 
+                var ownerCls: Class<*>? = null
                 for (name in queueNames) {
                     val c = runCatching { cl.loadClass(name) }.getOrNull() ?: continue
 
@@ -134,7 +135,6 @@ internal object WxSendApi {
                             (it.returnType == java.lang.Boolean.TYPE || it.returnType == Void.TYPE)
                     }
                     if (post == null) {
-                        // 诊断：把单参方法都打出来，看真实签名
                         val sig = c.declaredMethods
                             .filter { it.parameterCount == 1 }
                             .take(6)
@@ -146,23 +146,45 @@ internal object WxSendApi {
                     }
                     post.isAccessible = true
                     postToQueue = post
+                    ownerCls = c
+                    break
+                }
 
-                    // 持有者：静态无参、返回队列类自身
-                    holderGetter = c.declaredMethods.firstOrNull {
-                        Modifier.isStatic(it.modifiers) &&
-                            it.parameterCount == 0 &&
-                            it.returnType == c
-                    }?.apply { isAccessible = true }
-
-                    if (Modifier.isStatic(post.modifiers) || holderGetter != null) {
-                        xlog(
-                            "WxSendApi: 队列=${c.name} 入队=${post.name} " +
-                                "holder=${holderGetter?.name ?: "静态调用"}"
+                // 持有者：入队方法是实例方法时，需要拿到那个对象。
+                // 微信把 getter 放在别的类里（WeKit 注释：hi0.j1::d() 与 xv0.a9::e() 等价），
+                // 所以用 DexKit 跨类搜「静态 + 无参 + 返回 OwnerClass」的方法。
+                val owner = ownerCls
+                if (owner != null && !Modifier.isStatic(postToQueue!!.modifiers)) {
+                    val holders = bridge.findMethod {
+                        matcher(
+                            MethodMatcher.create()
+                                .paramCount(0)
+                                .returnType(owner.name)
+                                .modifiers(Modifier.STATIC)
                         )
+                    }
+                    val cands = holders.mapNotNull { md ->
+                        runCatching { Triple(md.className, md.name, md.paramTypeNames.size) }.getOrNull()
+                    }
+                    xlog("WxSendApi: 持有者候选 ${cands.size} 个：${cands.take(4).map { it.first.substringAfterLast('.') + "#" + it.second }}")
+
+                    for ((clsName, mName, pc) in cands) {
+                        val hc = runCatching { cl.loadClass(clsName) }.getOrNull() ?: continue
+                        val m = hc.declaredMethods.firstOrNull {
+                            it.name == mName && it.parameterCount == pc && Modifier.isStatic(it.modifiers)
+                        } ?: continue
+                        m.isAccessible = true
+                        holderGetter = m
+                        xlog("WxSendApi: 持有者=${hc.name.substringAfterLast('.')}#$mName")
                         break
                     }
-                    // 这个类不合适，继续找下一个
-                    postToQueue = null
+                }
+
+                if (postToQueue != null) {
+                    xlog(
+                        "WxSendApi: 入队=${postToQueue!!.declaringClass.name.substringAfterLast('.')}" +
+                            "#${postToQueue!!.name} holder=${holderGetter?.name ?: "静态调用"}"
+                    )
                 }
 
                 if (postToQueue == null) throw IllegalStateException("没找到入队方法 (NetSceneBase)->boolean")
