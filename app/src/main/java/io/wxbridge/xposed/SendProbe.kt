@@ -291,6 +291,8 @@ internal object SendProbe {
                         if (listenerLogsLeft <= 0) return
                         listenerLogsLeft--
                         xlog("SendProbe onClick: ${c.name}#onClick")
+                        // 顺手把这个监听器持有的控件捞出来，之后随时能发
+                        runCatching { WxUiSender.adopt(param.thisObject) }
                         Thread.currentThread().stackTrace.take(26).forEach { xlog("    at $it") }
                     }
                 })

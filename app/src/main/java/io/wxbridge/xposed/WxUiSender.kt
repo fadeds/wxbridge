@@ -80,6 +80,48 @@ internal object WxUiSender {
         if (n > 0) xlog("WxUiSender: 已 hook ChatFooter 构造 ×$n")
     }
 
+    /**
+     * 从点击监听器对象里捞控件引用。
+     *
+     * ChatFooter 的构造 hook 实测没触发（可能被复用了，或真实类在 Tinker 那份里），
+     * 但发送按钮的监听器 z1 是确定存在的 —— 每次点击都会拿到实例。
+     * 它的字段里必然持有 ChatFooter / 输入框 / 发送按钮，扫一遍存起来即可。
+     */
+    fun adopt(listener: Any) {
+        val f = footer ?: findFooterIn(listener)
+        if (f != null) {
+            footer = f
+            if (!dumped) {
+                dumped = true
+                xlog("WxUiSender: 从监听器捕获到 ChatFooter")
+                dumpFields(f)
+            }
+        }
+        if (editText == null) editText = findEditText(listener) ?: f?.let { findEditText(it) }
+        if (sendButton == null) sendButton = findClickableButton(listener) ?: f?.let { findClickableButton(it) }
+        xlog("WxUiSender: 控件就绪 footer=${footer != null} edit=${editText != null} btn=${sendButton != null}")
+    }
+
+    @Volatile
+    private var editText: EditText? = null
+
+    @Volatile
+    private var sendButton: View? = null
+
+    private fun findFooterIn(obj: Any): Any? {
+        var f: Class<*>? = obj.javaClass
+        while (f != null) {
+            for (field in f.declaredFields) {
+                if (Modifier.isStatic(field.modifiers)) continue
+                field.isAccessible = true
+                val v = runCatching { field.get(obj) }.getOrNull() ?: continue
+                if (v.javaClass.name == FOOTER) return v
+            }
+            f = f.superclass
+        }
+        return null
+    }
+
     private fun dumpFields(obj: Any) {
         runCatching {
             var f: Class<*>? = obj.javaClass
@@ -110,10 +152,11 @@ internal object WxUiSender {
      * @return null 表示成功发起，非 null 是失败原因
      */
     fun send(text: String): String? {
-        val f = footer ?: return "没有捕获到 ChatFooter —— 先在微信里打开一个聊天"
-        val activity = currentActivity() ?: return "拿不到当前 Activity"
+        val activity = currentActivity()
+        val edit = editText ?: footer?.let { findEditText(it) }
+            ?: return "没有捕获到输入框 —— 在微信里点一次发送按钮即可完成捕获"
 
-        val edit = findEditText(f) ?: return "ChatFooter 里找不到输入框"
+        val btnView = sendButton
         val act = activity
 
         var done = false
@@ -123,8 +166,9 @@ internal object WxUiSender {
             runCatching {
                 edit.setText(text)
                 edit.setSelection(edit.text?.length ?: 0)
-                val btn = act.window?.decorView?.findViewById<View>(SEND_BUTTON_ID)
-                    ?: findClickableButton(f)
+                val btn = btnView
+                    ?: act?.window?.decorView?.findViewById<View>(SEND_BUTTON_ID)
+                    ?: footer?.let { findClickableButton(it) }
                 if (btn == null) {
                     err = "找不到发送按钮"
                     return@runCatching
