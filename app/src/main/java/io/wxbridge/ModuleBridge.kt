@@ -69,8 +69,11 @@ object ModuleBridge {
             if (text != null) put("text", text)
         }
 
-        val first = BridgeAuth.tokenViaRoot()
-        if (first == null) {
+        // 这里刻意不用「先判空、再赋值」那套写法：
+        // 编译器在这条路径上没把 first 推断成非空，试了一次仍然报
+        // "inferred type is String? but String was expected"。
+        // 用 elvis + run 直接产出非空值，类型是确定的，不需要任何智能转换。
+        var token: String = BridgeAuth.tokenViaRoot() ?: run {
             lastChannel = "无凭证"
             return Result.Fail(
                 "拿不到通道凭证。\n" +
@@ -79,31 +82,27 @@ object ModuleBridge {
             )
         }
 
-        // 用非空的 first 初始化，token 的类型就是 String —— 下面的循环里会重新赋值，
-        // 如果沿用 `var token = tokenViaRoot()`（String?）编译器不会再做非空推断
-        var token = first
-        var attempt = 0
-        while (attempt < 2) {
-            when (val r = trySocket(token, req, timeoutMs)) {
-                is SocketTry.Done -> {
-                    lastChannel = "本地套接字"
-                    return r.result
-                }
-                SocketTry.Unavailable -> break
-                SocketTry.BadToken -> {
-                    // 两端可能各写了一份 token（微信比 App 先启动是常态），重读一次再试。
-                    // 顺带清掉微信路径缓存：/proc/<pid>/root 里的 pid 一旦换了，
-                    // 读文件会静默失败，看起来像是 token 变了
-                    BridgeAuth.forget()
-                    RootShell.resetPathCache()
-                    val again = BridgeAuth.tokenViaRoot()
-                    if (again == null) {
-                        lastChannel = "无凭证"
-                        return Result.Fail("通道 token 重读失败，检查 root 权限后重开微信")
-                    }
-                    token = again
-                    attempt++
-                }
+        // 第一次走主通道
+        val first = trySocket(token, req, timeoutMs)
+        if (first is SocketTry.Done) {
+            lastChannel = "本地套接字"
+            return first.result
+        }
+
+        // 鉴权失败：两端可能各写了一份 token（微信比 App 先启动是常态），重读一次再试。
+        // 顺带清掉微信路径缓存 —— /proc/<pid>/root 里的 pid 一旦换了，
+        // 读文件会静默失败，看起来像是 token 变了
+        if (first is SocketTry.BadToken) {
+            BridgeAuth.forget()
+            RootShell.resetPathCache()
+            token = BridgeAuth.tokenViaRoot() ?: run {
+                lastChannel = "无凭证"
+                return Result.Fail("通道 token 重读失败，检查 root 权限后重开微信")
+            }
+            val retry = trySocket(token, req, timeoutMs)
+            if (retry is SocketTry.Done) {
+                lastChannel = "本地套接字"
+                return retry.result
             }
         }
 
