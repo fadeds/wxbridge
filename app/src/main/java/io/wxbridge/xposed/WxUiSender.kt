@@ -4,6 +4,7 @@ import android.app.Activity
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
@@ -79,6 +80,51 @@ internal object WxUiSender {
         }
         if (n > 0) xlog("WxUiSender: 已 hook ChatFooter 构造 ×$n")
     }
+
+    /**
+     * 从被点击的那个 View 上捞控件。
+     *
+     * 监听器对象的字段里没有直接引用（实测 footer/edit/btn 全 false），
+     * 但点击时 View 本身就在手上 —— 顺着 parent 往上就能找到 ChatFooter，
+     * 再往下递归找 EditText，即可拿到完整的「输入框 + 发送按钮」。
+     */
+    fun adoptFromView(v: View) {
+        if (sendButton == null) sendButton = v
+
+        var p = v.parent
+        var host: View? = null
+        while (p != null) {
+            val pv = p as? View ?: break
+            if (pv.javaClass.name == FOOTER) {
+                footer = pv
+                host = pv
+                break
+            }
+            p = pv.parent
+        }
+        if (host == null) host = runCatching { v.rootView }.getOrNull()
+
+        if (editText == null && host != null) editText = findEditTextIn(host)
+
+        xlog(
+            "WxUiSender 控件就绪: footer=${footer != null} " +
+                "edit=${editText != null} btn=${sendButton != null} " +
+                "(host=${host?.javaClass?.simpleName})"
+        )
+    }
+
+    private fun findEditTextIn(root: View): EditText? {
+        if (root is EditText) return root
+        if (root is ViewGroup) {
+            for (i in 0 until root.childCount) {
+                findEditTextIn(root.getChildAt(i))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** 是不是发送按钮（id 来自点击探测日志） */
+    fun isSendButton(v: View): Boolean = v.id == SEND_BUTTON_ID
 
     /**
      * 从点击监听器对象里捞控件引用。

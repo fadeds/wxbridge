@@ -244,7 +244,7 @@ internal object SendProbe {
      * 不猜类名 —— 前 12 次点击记录类名 + id + 监听器类，
      * 并从 View.mListenerInfo 里把 OnClickListener 挖出来立刻 hook，下一次点击就能看到真正的处理逻辑。
      */
-    private var clicksLeft = 12
+    private var clicksLeft = 20
 
     /** 已经 hook 过的监听器类 */
     private val hookedListeners = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -256,8 +256,12 @@ internal object SendProbe {
                 "performClick",
                 object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (clicksLeft <= 0) return
                         val v = param.thisObject as? android.view.View ?: return
+                        // 控件捕获不受日志配额限制：只要点到发送按钮就更新引用
+                        if (WxUiSender.isSendButton(v)) {
+                            runCatching { WxUiSender.adoptFromView(v) }
+                        }
+                        if (clicksLeft <= 0) return
                         clicksLeft--
 
                         // 点击的 OnClickListener 藏在 View.mListenerInfo.mOnClickListener，
