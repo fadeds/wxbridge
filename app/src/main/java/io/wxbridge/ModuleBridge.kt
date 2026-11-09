@@ -69,8 +69,8 @@ object ModuleBridge {
             if (text != null) put("text", text)
         }
 
-        var token = BridgeAuth.tokenViaRoot()
-        if (token == null) {
+        val first = BridgeAuth.tokenViaRoot()
+        if (first == null) {
             lastChannel = "无凭证"
             return Result.Fail(
                 "拿不到通道凭证。\n" +
@@ -79,6 +79,9 @@ object ModuleBridge {
             )
         }
 
+        // 用非空的 first 初始化，token 的类型就是 String —— 下面的循环里会重新赋值，
+        // 如果沿用 `var token = tokenViaRoot()`（String?）编译器不会再做非空推断
+        var token = first
         var attempt = 0
         while (attempt < 2) {
             when (val r = trySocket(token, req, timeoutMs)) {
@@ -93,7 +96,12 @@ object ModuleBridge {
                     // 读文件会静默失败，看起来像是 token 变了
                     BridgeAuth.forget()
                     RootShell.resetPathCache()
-                    token = BridgeAuth.tokenViaRoot() ?: break
+                    val again = BridgeAuth.tokenViaRoot()
+                    if (again == null) {
+                        lastChannel = "无凭证"
+                        return Result.Fail("通道 token 重读失败，检查 root 权限后重开微信")
+                    }
+                    token = again
                     attempt++
                 }
             }
