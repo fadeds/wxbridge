@@ -1,12 +1,15 @@
 package io.wxbridge.xposed
 
+import android.content.Context
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.matchers.ClassMatcher
 import org.luckypray.dexkit.query.matchers.MethodMatcher
 import org.luckypray.dexkit.query.matchers.MethodsMatcher
 import java.lang.reflect.Constructor
 import java.lang.reflect.Method
+import java.io.File
 import java.lang.reflect.Modifier
+import java.util.zip.ZipFile
 
 /**
  * 用微信自己的网络层发文本消息。
@@ -44,13 +47,40 @@ internal object WxSendApi {
     var status: String = "未初始化"
         private set
 
-    fun init(cl: ClassLoader, apkPath: String) {
+    /**
+     * DexKit 的 so 不在微信的 nativeLibraryDir 里（我们是注入进去的模块），
+     * System.loadLibrary 必然找不到。从自己的 APK 里解出来再 System.load。
+     */
+    private fun loadNative(ctx: Context): Boolean {
+        val abi = android.os.Build.SUPPORTED_ABIS
+            .firstOrNull { it.contains("arm64") } ?: android.os.Build.SUPPORTED_ABIS[0]
+        val name = "libdexkit.so"
+        return runCatching {
+            val myApk = ctx.packageManager.getApplicationInfo("io.wxbridge", 0).sourceDir
+            val dst = File(ctx.codeCacheDir, name)
+            if (!dst.exists() || dst.length() == 0L) {
+                ZipFile(myApk).use { zf ->
+                    val entry = zf.getEntry("lib/$abi/$name")
+                        ?: throw IllegalStateException("APK 里没有 lib/$abi/$name")
+                    zf.getInputStream(entry).use { input ->
+                        dst.outputStream().use { input.copyTo(it) }
+                    }
+                }
+            }
+            System.load(dst.absolutePath)
+            xlog("WxSendApi: 已加载 $name ($abi, ${dst.length()} 字节)")
+            true
+        }.onFailure { xlog("WxSendApi: 加载 $name 失败 $it") }.getOrDefault(false)
+    }
+
+    fun init(ctx: Context, cl: ClassLoader, apkPath: String) {
         if (ready) return
         synchronized(this) {
             if (ready) return
             val t0 = System.currentTimeMillis()
             var bridge: DexKitBridge? = null
             try {
+                if (!loadNative(ctx)) throw IllegalStateException("native 库加载失败")
                 xlog("WxSendApi: DexKit 开始解析 $apkPath")
                 bridge = DexKitBridge.create(apkPath)
 

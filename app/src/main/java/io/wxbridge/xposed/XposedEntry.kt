@@ -70,7 +70,7 @@ class XposedEntry : IXposedHookLoadPackage {
                             // DexKit 解析 dex 要几百毫秒，绝不能占着 Application.attach
                             Thread {
                                 val apk = ctx.applicationInfo?.sourceDir
-                                if (apk != null) WxSendApi.init(cl, apk)
+                                if (apk != null) WxSendApi.init(ctx, cl, apk)
                             }.apply { isDaemon = true; name = "wxbridge-dexkit" }.start()
                         }
                     }
