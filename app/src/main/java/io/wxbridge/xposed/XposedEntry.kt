@@ -43,6 +43,8 @@ class XposedEntry : IXposedHookLoadPackage {
                 AutoReplyEngine.start(cl)
                 // 发送入口是混淆的，先探测出候选，别靠猜类名
                 SendProbe.install(cl)
+                // 发送走「驱动微信自己的界面」，不依赖混淆的发送 API
+                WxUiSender.install(cl)
             }
         }
     }

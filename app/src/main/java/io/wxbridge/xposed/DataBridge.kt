@@ -131,23 +131,23 @@ internal object DataBridge {
      * 不需要 ChatFooter 实例，最适合直接调用。参数顺序按 (talker, content) 猜的先试，
      * 失败再把两者对调一次 —— 这样一次调用就能确定顺序。
      */
+    /**
+     * 发一条文本。
+     *
+     * 不再调用微信的发送 API：8.0.79 里它在 `z1#onClick` 内被丢进异步队列，
+     * 方法名混淆 + Tinker 双 ClassLoader，靠类名反射不稳定。
+     * 改成驱动微信自己的界面（写输入框 + 点发送按钮），版本无关。
+     */
     private fun sendText(talker: String, text: String): String {
         val o = JSONObject()
         o.put("talker", talker)
         o.put("text", text)
-        val loader = cl ?: throw IllegalStateException("ClassLoader 未初始化")
-
-        val c = XposedHelpers.findClass("com.tencent.mm.pluginsdk.ui.chat.va", loader)
-        val m = c.declaredMethods.firstOrNull {
-            it.name == "a" && Modifier.isStatic(it.modifiers) && it.parameterCount == 2 &&
-                it.parameterTypes[0] == String::class.java &&
-                it.parameterTypes[1] == String::class.java
-        } ?: throw IllegalStateException("va#a(String,String) 未找到")
-
-        m.isAccessible = true
-        val r = m.invoke(null, talker, text)
-        o.put("method", "va#a")
-        o.put("return", r?.toString() ?: "null")
+        val err = WxUiSender.send(text)
+        if (err == null) {
+            o.put("method", "ui-footer")
+        } else {
+            o.put("error", err)
+        }
         return o.toString()
     }
 
