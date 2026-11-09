@@ -50,6 +50,7 @@ internal object SendProbe {
         hookSendClick()
         hookSendButtonListener(cl)
         scanChatPackage(cl)
+        hookSendCandidates(cl)
     }
 
     /**
@@ -101,7 +102,6 @@ internal object SendProbe {
         }
         val targets = names.filter { it.startsWith("com.tencent.mm.pluginsdk.ui.chat") }
         xlog("SendProbe: pluginsdk.ui.chat 下 ${targets.size} 个类")
-        targets.forEach { xlog("SendProbe 类: $it") }
 
         var shown = 0
         for (name in targets) {
@@ -117,6 +117,50 @@ internal object SendProbe {
             }
         }
     }
+
+    /**
+     * 从包扫描里挑出来的发送候选（都带 2 个 String，形状最像 talker + content）：
+     *   ChatFooter#F0(String, String)
+     *   ChatFooter#N1(String, String)
+     *   ChatFooter#y (String, String, String)
+     *   va#a       (String, String)  static ← 静态方法，最适合直接调用
+     *
+     * 手动发一条，谁被调用、参数谁是 talker 谁是 content，一看便知。
+     */
+    private fun hookSendCandidates(cl: ClassLoader) {
+        hookNamed("com.tencent.mm.pluginsdk.ui.chat.ChatFooter", listOf("F0", "N1", "y"), cl)
+        hookNamed("com.tencent.mm.pluginsdk.ui.chat.va", listOf("a"), cl)
+    }
+
+    private fun hookNamed(className: String, methodNames: List<String>, cl: ClassLoader) {
+        runCatching {
+            val c = XposedHelpers.findClass(className, cl)
+            var n = 0
+            for (m in c.declaredMethods) {
+                if (m.name !in methodNames) continue
+                runCatching {
+                    XposedBridge.hookMethod(m, object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            if (candLogsLeft <= 0) return
+                            candLogsLeft--
+                            val args = param.args.joinToString(" | ") { a ->
+                                when (a) {
+                                    null -> "null"
+                                    is String -> if (a.length > 40) "\"${a.take(40)}…\"" else "\"$a\""
+                                    else -> a.toString().take(30)
+                                }
+                            }
+                            xlog("SendProbe 候选命中: ${c.name}#${m.name} = $args")
+                        }
+                    })
+                    n++
+                }
+            }
+            if (n > 0) xlog("SendProbe: 已 hook 候选 $className ×$n")
+        }.onFailure { xlog("SendProbe: hook $className 失败 ${it.message}") }
+    }
+
+    private var candLogsLeft = 8
 
     /** BaseDexClassLoader.pathList.dexElements[].dexFile.entries() */
     private fun dexClasses(cl: ClassLoader): List<String> {
