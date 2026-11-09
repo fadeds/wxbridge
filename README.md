@@ -49,18 +49,18 @@
 
 其余全部在主 App 进程。微信升级导致 hook 失效时，你只需要修 `WcdbKeyHook.kt` 一个文件。
 
-**2. 小数据走文件，查询走本地套接字（广播兜底）。**
+**2. 小数据走文件，查询走广播（套接字优先，实测多数机型被 SELinux 拦）。**
 
 密码、配置、日志、草稿这类小东西走微信自己的目录：微信进程读**它自己的** `files/` 和 `shared_prefs/`（100% 有权限），主 App 用 `su cat` 读（100% 能读）。零权限谈判。
 
 但「查库」和「发消息」是请求-响应，得有个通道。现在是两层：
 
-| 层 | 实现 | 状态 |
+| 层 | 实现 | 实测状态 |
 |---|---|---|
-| 主通道 | `BridgeServer` — abstract unix socket，UTF-8 直传，无 1MB 上限、无 base64 | 默认走这条 |
-| 兜底 | 老的显式广播 + 120KB 分片 | socket 连不上时自动降级 |
+| 优先 | `BridgeServer` — abstract unix socket，UTF-8 直传，无 1MB 上限、无 base64 | Android 14 / HyperOS 被 SELinux 拒（MLS 分类不同） |
+| 兜底 | 显式广播 + 120KB 分片 | **实际在用这条** |
 
-abstract unix socket 跨 uid 在不同 ROM 上时通时不通（SELinux `unix_stream_socket connectto`），所以兜底不能删。**两条通道都必须带 token**（`files/wxbridge/bridge.token`，32 位十六进制，只有 root 读得到）——上一版广播是 `RECEIVER_EXPORTED` 且零校验，同机任意 App 都能把聊天库读走，这个洞已经堵上。
+跨 app 的 abstract unix socket 在 SELinux enforcing 下基本连不通（见「已知限制」），所以广播不是「兜底」而是事实上的主通道；套接字只在策略宽松的机器上生效。**两条通道都必须带 token**（`files/wxbridge/bridge.token`，32 位十六进制，只有 root 读得到）——上一版广播是 `RECEIVER_EXPORTED` 且零校验，同机任意 App 都能把聊天库读走，这个洞已经堵上。
 
 实际走的哪条路，App 里点「⑥ 模块查询」会直接显示。
 
@@ -324,9 +324,18 @@ App 底部「更新」一栏可以直接检查新版本：
 
 **只支持 Android 端微信。** PC 微信 4.0 是另一套 `db_storage` 结构。
 
-**本地套接字在部分 ROM 上连不通。** abstract unix socket 跨 uid 要过 SELinux 的
-`unix_stream_socket connectto` 检查，不同 ROM 的策略不一样。被拦时自动降级为广播通道 ——
-功能完全一样，只是大结果集要多切几十个包、慢一些。`⑥ 模块查询` 里会显示当前实际用的通道。
+**本地套接字在多数机型上连不通。** Android 10+ 的 SELinux 给每个 App 分配了不同的 MLS
+分类，App 之间连 abstract unix socket 会被直接拒：
+
+```
+avc: denied { connectto } scontext=u:r:untrusted_app:s0:c190,... 
+     tcontext=u:r:untrusted_app:s0:c15,... tclass=unix_stream_socket permissive=0
+```
+
+实测 Android 14 / HyperOS 就是这种情况，属于设计使然而不是配置问题。
+所以**广播是事实上的主通道**，套接字只在 SELinux 宽松或装了策略模块的机器上才有意义。
+探明一次后本进程就不再重试（避免每次都往 dmesg 写一条 avc denied），
+`⑥ 模块查询` 里会直接写出「广播（套接字被 SELinux 拒绝）」。
 
 ---
 

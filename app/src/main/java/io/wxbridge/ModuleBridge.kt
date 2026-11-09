@@ -8,6 +8,7 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.os.Build
 import android.util.Base64
+import android.util.Log
 import org.json.JSONObject
 import java.util.TreeMap
 import java.util.UUID
@@ -43,6 +44,23 @@ object ModuleBridge {
     @Volatile
     var lastChannel: String = "未连接"
         private set
+
+    /** 通道的补充说明（为什么降级、被什么挡住的），空表示无需说明 */
+    @Volatile
+    var channelNote: String = ""
+        private set
+
+    /**
+     * 一旦被 SELinux 拒过就不再尝试本地套接字。
+     *
+     * 实测 Android 14 + HyperOS：App(u:r:untrusted_app:s0:c190,...) 连
+     * 微信(u:r:untrusted_app:s0:c15,...) 的 abstract socket 会被 MLS 直接拒：
+     *   avc: denied { connectto } ... tclass=unix_stream_socket permissive=0
+     * 两个 App 的 MLS 分类不同，这是设计使然，改不了。每次重试都会再往
+     * dmesg 写一条 avc denied，所以探明一次就够了，本进程后续固定走广播。
+     */
+    @Volatile
+    private var socketDisabled = false
 
     /** 查库。sql 为空表示自检：只问模块「桥通了吗、库拿到了吗」 */
     fun query(ctx: Context, sql: String, timeoutMs: Long = 10_000): Result =
@@ -82,8 +100,9 @@ object ModuleBridge {
             )
         }
 
-        // 第一次走主通道
-        val first = trySocket(token, req, timeoutMs)
+        // 第一次走主通道（被 SELinux 拒过就直接跳过，省一次 avc denied）
+        val first: SocketTry =
+            if (socketDisabled) SocketTry.Unavailable else trySocket(token, req, timeoutMs)
         if (first is SocketTry.Done) {
             lastChannel = "本地套接字"
             return first.result
@@ -99,14 +118,15 @@ object ModuleBridge {
                 lastChannel = "无凭证"
                 return Result.Fail("通道 token 重读失败，检查 root 权限后重开微信")
             }
-            val retry = trySocket(token, req, timeoutMs)
+            val retry = if (socketDisabled) SocketTry.Unavailable
+            else trySocket(token, req, timeoutMs)
             if (retry is SocketTry.Done) {
                 lastChannel = "本地套接字"
                 return retry.result
             }
         }
 
-        lastChannel = "广播兜底"
+        lastChannel = if (socketDisabled) "广播（套接字被 SELinux 拒绝）" else "广播兜底"
         return broadcastCall(ctx, token, req, timeoutMs)
     }
 
@@ -147,6 +167,14 @@ object ModuleBridge {
             }
         } catch (t: Throwable) {
             // 连不上/超时/被拒绝都视为「这条通道不可用」，不要把异常抛给界面
+            val msg = (t.message ?: "") + " " + t.javaClass.simpleName
+            if (msg.contains("EACCES", true) || msg.contains("Permission denied", true)) {
+                if (!socketDisabled) {
+                    socketDisabled = true
+                    channelNote = "本地套接字被 SELinux 拒绝（两个 App 的 MLS 分类不同），已固定走广播"
+                    Log.i("WxBridgeApp", "通道：$channelNote")
+                }
+            }
             SocketTry.Unavailable
         } finally {
             runCatching { sock.close() }

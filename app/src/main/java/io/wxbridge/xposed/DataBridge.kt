@@ -141,7 +141,9 @@ internal object DataBridge {
 
             val expect = BridgeAuth.readFrom(ctx?.filesDir)
             if (expect == null || intent.getStringExtra("token") != expect) {
-                // 不知道 token 的进程一律当攻击者处理，不回任何数据
+                // 不知道 token 的进程一律当攻击者处理，不回任何数据。
+                // 这条日志是审计用的：真有人在本机试探，LSPosed 日志里能看见
+                xlog("DataBridge: 拒绝了一个不带有效 token 的请求（${intent.action}）")
                 reply(reqId, "", "通道鉴权失败：token 不匹配")
                 return
             }

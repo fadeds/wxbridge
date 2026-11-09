@@ -471,6 +471,7 @@ class MainActivity : Activity() {
             log("连接微信进程（本地套接字优先，广播兜底）…")
             val self = withContext(Dispatchers.IO) { ModuleBridge.query(this@MainActivity, "") }
             log("通道：${ModuleBridge.lastChannel}")
+            if (ModuleBridge.channelNote.isNotBlank()) log("  ${ModuleBridge.channelNote}")
             val ver = WxVersionPolicy.appVersion(this@MainActivity)
             log(WxVersionPolicy.describe(ver, cbAllowUnverified.isChecked))
             when (self) {
